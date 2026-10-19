@@ -404,3 +404,17 @@ def test_unresolvable_shared_prefix_never_writes(index):
     with pytest.raises(Invalid):
         append(root, record, client)
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("change", [
+    lambda source: source.replace('linux = { ', 'linux = { ["99.0"] = compute_resource(), '),
+    lambda source: source.replace('sha256 = "old-hash"', 'sha256 = compute_hash()'),
+    lambda source: source.replace('url = "https://github.com/acme/foo/archive/refs/tags/v1.0.0.tar.gz"',
+                                  'url = compute_url()'),
+])
+def test_dynamic_historical_resources_are_not_silently_ignored(index, change):
+    root, path = index
+    path.write_text(change(descriptor()))
+    record = check_package(package_info(path, root), FakeGitHub())
+    assert record["status"] == "error"
+    assert "dynamic" in record["reason"]

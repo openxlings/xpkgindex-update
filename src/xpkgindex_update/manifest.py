@@ -106,6 +106,19 @@ def validate_config(info: dict) -> None:
     if not isinstance(config["tag"], str):
         raise Invalid("tag must be a string")
     tag_version(config["tag"], "")
+    # Unknown expressions must not disappear from version discovery and make
+    # an older release look like the newest published version.
+    for plat in PLATFORMS:
+        node = info["package"]["xpm"].table().get(plat)
+        if node:
+            for version, entry in node.table().items():
+                if not re.match(r"^(?:[0-9]|b[0-9])", version):
+                    continue
+                if entry.kind == "expr":
+                    raise Invalid("dynamic version entries are not supported")
+                for key in ("url", "sha256"):
+                    if key in entry.fields:
+                        entry.fields[key].plain()
     if not info["platforms"]:
         raise Invalid("no versioned platforms")
     urls = config["url"]
