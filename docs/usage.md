@@ -58,13 +58,31 @@ max_prs: 3
     token: ${{ github.token }}
 ```
 
-`mode: propose` creates PRs and requires an App/PAT token with repository write
-access. Checkout should use `persist-credentials: false`. Plans are uploaded as
-Actions artifacts. One open update PR per package; closed versions are not reopened.
+`mode: propose` creates PRs and requires a token with repository write access.
+Checkout should use `persist-credentials: false`. Plans are uploaded as Actions
+artifacts. One open update PR per package; closed versions are not reopened.
 Development end-to-end tests use `propose --draft --base <test-branch>`.
 
 The first integration is mcpp-index. The xim adapter boundary is included,
 but moving `latest.ref` is intentionally disabled pending an explicit policy.
+
+## CI authentication
+
+Schedule the caller workflow with `schedule` and run proposals only on its
+repository's default branch. Grant `contents: write` and `pull-requests: write`
+only to the proposal job. Keep resource builds in separate read-only jobs.
+
+A GitHub App installation token can create bot PRs that trigger ordinary PR CI.
+With the built-in `GITHUB_TOKEN`, organization and repository settings must allow
+Actions to create PRs, and the caller must explicitly dispatch CI workflows
+(`actions: write`) to run unattended. The PR author is `github-actions[bot]`;
+commit author metadata alone does not determine the PR author.
+
+The [mcpp-index integration](https://github.com/mcpplibs/mcpp-index/blob/main/.github/workflows/xpkgindex-update.yml)
+uses daily scanning, a fixed artifact plan, bot proposals and explicit CI dispatch.
+It verifies the PR identity and head, avoids duplicate PRs and resumes missing
+dispatches. CLI proposals can consume a previously checked plan; the composite
+`mode: propose` performs its own check first. Neither path merges PRs.
 
 ## Shared resources
 

@@ -28,7 +28,7 @@ After checking out your index:
     token: ${{ github.token }}
 ```
 
-Use `mode: propose` with an App/PAT token to open update PRs.
+Use `mode: propose` with a write token to open PRs; see [CI authentication](docs/usage.md#ci-authentication).
 Build verification and merging remain with the index maintainers.
 
 [Usage & CLI](docs/usage.md) · [Contributing](CONTRIBUTING.md) · [MIT License](LICENSE)
