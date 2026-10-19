@@ -50,6 +50,10 @@ def tag_version(template: str, tag: str) -> str | None:
 
 
 def package_info(path: Path, root: Path) -> dict:
+    root = root.resolve()
+    path = path.resolve()
+    if not path.is_relative_to(root / "pkgs"):
+        raise Invalid("descriptor is outside pkgs")
     text = path.read_bytes().decode("utf-8")
     pkg = parse(text).table()
     namespace = pkg.get("namespace")

@@ -21,7 +21,7 @@ def config(root: Path) -> dict:
     path = root / ".github/xpkgindex-update.yml"
     result = {"version": 1, "adapter": "mcpp-index", "max_prs": 3}
     if path.exists():
-        for line in path.read_text().splitlines():
+        for line in path.read_text(encoding="utf-8").splitlines():
             line = line.split("#", 1)[0].strip()
             if not line:
                 continue
@@ -104,11 +104,11 @@ def main(argv=None) -> int:
                 if not path.exists():
                     raise Invalid(f"existing descriptor was removed: {filename}")
                 before = run("git", "show", f"{args.base}:{filename}", cwd=root)
-                assert_preserved(before, path.read_text())
+                assert_preserved(before, path.read_text(encoding="utf-8"))
                 checked += 1
             write_report({"checked_descriptors": checked, "status": "preserved"}, args.output)
             return 0
-        plan = json.loads(Path(args.plan).read_text())
+        plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
         if plan.get("format") != 1 or plan.get("adapter") != policy["adapter"]:
             raise Invalid("unsupported plan format/adapter")
         if args.package:

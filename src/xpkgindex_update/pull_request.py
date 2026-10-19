@@ -14,7 +14,7 @@ from .lua_edit import Invalid
 
 
 def run(*args: str, cwd: Path, env=None) -> str:
-    result = subprocess.run(args, cwd=cwd, env=env, text=True, capture_output=True)
+    result = subprocess.run(args, cwd=cwd, env=env, text=True, encoding="utf-8", capture_output=True)
     if result.returncode:
         raise Invalid(f"{args[0]} {args[1]} failed: {result.stderr.strip()}")
     return result.stdout.strip()
@@ -52,7 +52,7 @@ def propose(root, plan, github, *, base=None, draft=False, limit=3) -> list[dict
         if sum(o["status"] == "created" for o in outcomes) >= limit:
             break
         with tempfile.TemporaryDirectory(prefix="xpkgindex-update-") as directory:
-            work = Path(directory) / "work"
+            work = (Path(directory) / "work").resolve()
             run("git", "worktree", "add", "--detach", str(work), base_sha, cwd=root)
             try:
                 changed = append(work, record, github)
@@ -61,7 +61,7 @@ def propose(root, plan, github, *, base=None, draft=False, limit=3) -> list[dict
                 remote = run("git", "ls-remote", "--heads", "origin", branch, cwd=work, env=env)
                 if remote:
                     run("git", "fetch", "origin", f"refs/heads/{branch}", cwd=work, env=env)
-                    expected = (work / record["path"]).read_text().rstrip()
+                    expected = (work / record["path"]).read_text(encoding="utf-8").rstrip()
                     actual = run("git", "show", f"FETCH_HEAD:{record['path']}", cwd=work)
                     changed_paths = run("git", "diff", "--name-only", base_sha, "FETCH_HEAD", cwd=work).splitlines()
                     if actual != expected or changed_paths != [record["path"]]:

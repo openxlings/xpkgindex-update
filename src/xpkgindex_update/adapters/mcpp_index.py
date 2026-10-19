@@ -22,6 +22,7 @@ from ..manifest import (
 
 
 def append(root: Path, record: dict, github: GitHub) -> bool:
+    root = root.resolve()
     if record.get("status") != "update-ready":
         raise Invalid("only update-ready records can be applied")
     original = root / record["path"]
