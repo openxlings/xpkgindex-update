@@ -1,0 +1,50 @@
+name: xpkgindex-update
+description: Discover releases and append package versions without changing published entries
+inputs:
+  mode:
+    description: check or propose
+    default: check
+  token:
+    description: GitHub token; write access is required only for propose
+    required: false
+  package:
+    description: Optional namespace:name filter
+    required: false
+outputs:
+  plan:
+    description: JSON update plan path
+    value: ${{ steps.update.outputs.plan }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Run updater from the pinned Action source
+      id: update
+      shell: bash
+      env:
+        UPDATE_MODE: ${{ inputs.mode }}
+        UPDATE_PACKAGE: ${{ inputs.package }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+        export PYTHONPATH="$GITHUB_ACTION_PATH/src${PYTHONPATH:+:$PYTHONPATH}"
+        plan="$RUNNER_TEMP/xpkgindex-update-plan.json"
+        args=()
+        if [ -n "$UPDATE_PACKAGE" ]; then args+=(--package "$UPDATE_PACKAGE"); fi
+        case "$UPDATE_MODE" in
+          check|propose) ;;
+          *) echo "unsupported mode: $UPDATE_MODE" >&2; exit 1 ;;
+        esac
+        echo "plan=$plan" >> "$GITHUB_OUTPUT"
+        python -m xpkgindex_update check "${args[@]}" --output "$plan"
+        if [ "$UPDATE_MODE" = propose ]; then
+          python -m xpkgindex_update propose --plan "$plan"
+        fi
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: xpkgindex-update-plan
+        path: ${{ steps.update.outputs.plan }}
+        if-no-files-found: warn
