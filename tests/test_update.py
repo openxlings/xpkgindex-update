@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -294,3 +295,17 @@ def test_linux_plan_applies_to_windows_checkout_without_rewriting_old_blocks(ind
     before = path.read_bytes().decode()
     assert append(root, record, client)
     assert_preserved(before, path.read_bytes().decode())
+
+
+def test_xim_fixture_never_moves_an_existing_latest_alias(index):
+    root, path = index
+    fixture = Path(__file__).parent / "fixtures/xim-latest.lua"
+    path.write_bytes(fixture.read_bytes())
+    before = path.read_bytes()
+    client = FakeGitHub()
+    record = check_package(package_info(path, root), client)
+    assert record["id"] == "xim:foo"
+    assert record["status"] == "update-ready"
+    with pytest.raises(Invalid, match="latest.ref"):
+        append(root, record, client)
+    assert path.read_bytes() == before
