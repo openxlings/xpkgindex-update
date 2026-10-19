@@ -12,6 +12,11 @@ from .lua_edit import Invalid, Node, parse
 PLATFORMS = ("linux", "macosx", "windows")
 
 
+def descriptor_digest(text: str) -> str:
+    """Compare Git text across LF/CRLF checkouts, without rewriting source bytes."""
+    return hashlib.sha256(text.replace("\r\n", "\n").encode("utf-8")).hexdigest()
+
+
 def version_key(version: str) -> tuple:
     match = re.fullmatch(r"(b?)([0-9]+(?:\.[0-9]+)*)([a-z]?)", version)
     if not match:
@@ -219,7 +224,7 @@ def check_package(info: dict, github: GitHub) -> dict:
             raise Invalid("ambiguous version spellings or tags")
         commit = github.commit(repo, tag)
         record.update(candidate=candidate, tag=tag, upstream_commit=commit,
-                      descriptor_sha256=hashlib.sha256(info["text"].encode()).hexdigest())
+                      descriptor_sha256=descriptor_digest(info["text"]))
         assets = []
         for plat in info["platforms"]:
             spec = url_for(info["autoupdate"], plat)

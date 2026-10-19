@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from pathlib import Path
@@ -11,6 +10,7 @@ from ..github import GitHub
 from ..lua_edit import Invalid
 from ..manifest import (
     assert_preserved,
+    descriptor_digest,
     expand,
     package_info,
     repo_for,
@@ -42,7 +42,7 @@ def append(root: Path, record: dict, github: GitHub) -> bool:
         if all(present):
             return False  # Existing versions are never rewritten or refreshed.
         raise Invalid("existing-version-conflict")
-    if hashlib.sha256(text.encode()).hexdigest() != record["descriptor_sha256"]:
+    if descriptor_digest(text) != record["descriptor_sha256"]:
         raise Invalid("descriptor changed since check; regenerate plan")
     asset_map = {a["platform"]: a["resources"] for a in record["assets"]}
     if len(asset_map) != len(record["assets"]) or set(asset_map) != set(info["platforms"]):
