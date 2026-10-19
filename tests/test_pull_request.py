@@ -59,3 +59,31 @@ def test_push_then_failed_pr_is_recovered_without_overwriting(tmp_path, monkeypa
     assert git("ls-remote", "origin", branch) == first
     assert path.read_bytes() == before
     assert git("rev-parse", "HEAD") == plan["base_commit"]
+
+
+@pytest.mark.parametrize("branch,files", [
+    ("auto/bump-compat-foo-1.1.0", []),
+    ("feat/manual-foo-upgrade", [{"path": "pkgs/f/foo.lua"}]),
+])
+def test_existing_bot_or_manual_package_pr_prevents_duplicate(tmp_path, monkeypatch, branch, files):
+    client = FakeGitHub()
+    client.token = "fixture-token-never-sent"
+    url = "https://github.com/acme/index/pull/9"
+
+    def run(*args, cwd, env=None):
+        if args[:2] == ("git", "status"):
+            return ""
+        if args[:3] == ("gh", "repo", "view"):
+            return json.dumps({"defaultBranchRef": {"name": "main"}})
+        if args[:2] == ("git", "rev-parse"):
+            return "base"
+        if args[:3] == ("gh", "pr", "list"):
+            assert "headRefName,state,url,files" in args
+            return json.dumps([{"headRefName": branch, "state": "OPEN", "url": url, "files": files}])
+        pytest.fail(f"an existing package PR must prevent mutation: {args}")
+
+    monkeypatch.setattr(pull_request, "run", run)
+    plan = {"base_commit": "base", "packages": [{
+        "status": "update-ready", "id": "compat:foo", "path": "pkgs/f/foo.lua", "candidate": "1.1.0",
+    }]}
+    assert pull_request.propose(tmp_path, plan, client) == [{"id": "compat:foo", "status": "pending", "url": url}]

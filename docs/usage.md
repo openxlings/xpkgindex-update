@@ -60,7 +60,8 @@ max_prs: 3
 
 `mode: propose` creates PRs and requires a token with repository write access.
 Checkout should use `persist-credentials: false`. Plans are uploaded as Actions
-artifacts. One open update PR per package; closed versions are not reopened.
+artifacts. An open PR already editing the package also blocks duplicate proposals, including
+manual package PRs. Closed candidate versions are not reopened.
 Development end-to-end tests use `propose --draft --base <test-branch>`.
 
 The first integration is mcpp-index. The xim adapter boundary is included,
