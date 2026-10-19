@@ -114,7 +114,18 @@ def main(argv=None) -> int:
         if args.package:
             plan["packages"] = [r for r in plan["packages"] if r["id"] == args.package]
         if args.command == "propose":
-            outcomes = propose(root, plan, github, base=args.base, draft=args.draft, limit=policy["max_prs"])
+            outcomes = []
+            for record in plan["packages"]:
+                if record["status"] != "update-ready":
+                    continue
+                remaining = policy["max_prs"] - sum(o["status"] == "created" for o in outcomes)
+                if remaining <= 0:
+                    break
+                try:
+                    outcomes.extend(propose(root, {**plan, "packages": [record]}, github,
+                                            base=args.base, draft=args.draft, limit=remaining))
+                except (Invalid, OSError) as exc:
+                    outcomes.append({"id": record["id"], "status": "error", "reason": str(exc)})
         else:
             if run("git", "rev-parse", "HEAD", cwd=root) != plan["base_commit"]:
                 raise Invalid("index HEAD changed since check")
@@ -124,7 +135,7 @@ def main(argv=None) -> int:
                     changed = append(root, record, github)
                     outcomes.append({"id": record["id"], "status": "appended" if changed else "existing"})
         write_report({"packages": outcomes}, args.output)
-        return 0
+        return int(any(record["status"] == "error" for record in outcomes))
     except (Invalid, OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
         print(f"xpkgindex-update: {exc}", file=sys.stderr)
         return 1

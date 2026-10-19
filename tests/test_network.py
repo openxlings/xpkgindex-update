@@ -1,0 +1,76 @@
+import io
+import socket
+import urllib.error
+
+import pytest
+
+from xpkgindex_update.github import GitHub, WaitingAssets, public_url
+from xpkgindex_update.lua_edit import Invalid
+
+
+@pytest.mark.parametrize("url", ["http://example.org/a", "https://user:password@example.org/a",
+                                 "https://example.org:8443/a"])
+def test_unsafe_urls_rejected(url):
+    with pytest.raises(Invalid):
+        public_url(url)
+
+
+def test_private_dns_rejected(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("127.0.0.1", 443))])
+    with pytest.raises(Invalid, match="private"):
+        public_url("https://private.example/file")
+
+
+def test_resources_are_cached_and_never_receive_api_token(monkeypatch):
+    requests = []
+
+    class Opener:
+        def open(self, request, timeout):
+            requests.append(request)
+            return io.BytesIO(b"PKfixture")
+
+    monkeypatch.setattr("xpkgindex_update.github.public_url", lambda u: u)
+    monkeypatch.setattr("urllib.request.build_opener", lambda *a: Opener())
+    client = GitHub("secret-api-token")
+    first = client.artifact("https://example.org/resource.zip")
+    assert client.artifact("https://example.org/resource.zip") == first
+    assert len(requests) == 1
+    assert not requests[0].has_header("Authorization")
+
+
+def test_artifact_dns_failure_is_retried(monkeypatch):
+    client = GitHub()
+    calls = []
+
+    def once(url):
+        calls.append(url)
+        if len(calls) == 1:
+            raise socket.gaierror("temporary DNS failure")
+        return {"url": url}
+
+    monkeypatch.setattr(client, "_artifact_once", once)
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    assert client.artifact("https://example.org/a")["url"] == "https://example.org/a"
+    assert len(calls) == 2
+
+
+def test_missing_asset_is_distinct_from_server_failure(monkeypatch):
+    class Opener:
+        def open(self, request, timeout):
+            raise urllib.error.HTTPError(request.full_url, 404, "missing", {}, None)
+
+    monkeypatch.setattr("xpkgindex_update.github.public_url", lambda u: u)
+    monkeypatch.setattr("urllib.request.build_opener", lambda *a: Opener())
+    with pytest.raises(WaitingAssets):
+        GitHub().artifact("https://example.org/a.zip")
+
+
+def test_html_is_not_an_artifact(monkeypatch):
+    class Opener:
+        def open(self, request, timeout):
+            return io.BytesIO(b"<!doctype html><title>not a download</title>")
+
+    monkeypatch.setattr("xpkgindex_update.github.public_url", lambda u: u)
+    monkeypatch.setattr("urllib.request.build_opener", lambda *a: Opener())
+    with pytest.raises(Invalid, match="HTML"):
+        GitHub().artifact("https://example.org/a.zip")
