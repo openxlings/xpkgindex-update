@@ -179,8 +179,15 @@ def check_package(info: dict, github: GitHub) -> dict:
         record["repo"] = repo
         releases = github.listing(repo, "releases")
         candidates = {}
+        current_dates = [r.get("published_at", "") for r in releases
+                         if tag_version(info["autoupdate"]["tag"], r["tag_name"]) == current]
+        current_date = max(current_dates, default="")
         for release in releases:
             if release.get("draft") or release.get("prerelease"):
+                continue
+            # Some projects changed numbering schemes (SafeInt 3.24 -> 3.0.28a).
+            # A larger-looking historical spelling must not propose older source.
+            if current_date and release.get("published_at", "") < current_date:
                 continue
             tag = release["tag_name"]
             version = tag_version(info["autoupdate"]["tag"], tag)

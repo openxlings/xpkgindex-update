@@ -204,6 +204,17 @@ def test_no_downgrade(index):
     assert record["status"] == "up-to-date"
 
 
+def test_historical_numbering_scheme_does_not_downgrade(index):
+    root, path = index
+    path.write_text(descriptor().replace("1.0.0", "3.0.28a"))
+    client = FakeGitHub(releases=[
+        {"tag_name": "v3.0.28a", "published_at": "2023-05-01T00:00:00Z"},
+        {"tag_name": "v3.24", "published_at": "2020-06-24T00:00:00Z"},
+    ])
+    record = check_package(package_info(path, root), client)
+    assert record["status"] == "up-to-date"
+
+
 def test_ambiguous_tags_fail(index):
     root, path = index
     record = check_package(package_info(path, root), FakeGitHub(releases=[
