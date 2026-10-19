@@ -261,3 +261,13 @@ def test_literal_digest_covers_the_entire_descriptor(index):
     root, path = index
     record = check_package(package_info(path, root), FakeGitHub())
     assert record["descriptor_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_crlf_old_blocks_are_preserved_byte_for_byte(index):
+    root, path = index
+    path.write_bytes(descriptor().replace("\n", "\r\n").encode())
+    before = path.read_bytes().decode()
+    client = FakeGitHub()
+    record = check_package(package_info(path, root), client)
+    assert append(root, record, client)
+    assert_preserved(before, path.read_bytes().decode())

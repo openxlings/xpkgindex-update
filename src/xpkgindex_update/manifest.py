@@ -50,7 +50,7 @@ def tag_version(template: str, tag: str) -> str | None:
 
 
 def package_info(path: Path, root: Path) -> dict:
-    text = path.read_text(encoding="utf-8")
+    text = path.read_bytes().decode("utf-8")
     pkg = parse(text).table()
     namespace = pkg.get("namespace")
     identity = (namespace.string() if namespace else "mcpplibs") + ":" + pkg["name"].string()

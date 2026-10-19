@@ -103,7 +103,7 @@ def append(root: Path, record: dict, github: GitHub) -> bool:
     # Atomic replacement only after every platform and download has been checked.
     temporary = path.with_name(path.name + ".xpkgindex-update.tmp")
     try:
-        temporary.write_text(updated, encoding="utf-8")
+        temporary.write_bytes(updated.encode("utf-8"))
         temporary.chmod(path.stat().st_mode & 0o777)
         temporary.replace(path)
     finally:
