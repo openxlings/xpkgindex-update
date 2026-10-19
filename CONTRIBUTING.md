@@ -1,6 +1,13 @@
 # Contributing
 
-Use a branch and a pull request. Run the commands in README before pushing.
+Use a branch and a pull request. Run these checks before pushing:
+
+```sh
+python -m pip install -e '.[test]'
+ruff check .
+pytest -q
+python -m build
+```
 
 Changes must preserve every published version block, including its mirrors,
 hashes, comments and ordering. Cover parser and update behavior with fixtures;

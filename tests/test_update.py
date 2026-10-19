@@ -131,7 +131,8 @@ def test_append_preserves_old_versions_and_build_fields(index):
     assert append(root, record, client)
     after = path.read_text()
     assert_preserved(before, after)
-    assert after.count('["1.1.0"]') == 3
+    assert after.count('["1.1.0"] =') == 4  # One definition, three references.
+    assert after.count('url = "https://github.com/acme/foo/archive/refs/tags/v1.1.0.tar.gz"') == 1
     assert 'generated_files = { ["x"] = [==[ { } -- "quoted" ]==] }' in after
     assert not append(root, record, client)
     assert after == path.read_text()
@@ -307,5 +308,99 @@ def test_xim_fixture_never_moves_an_existing_latest_alias(index):
     assert record["id"] == "xim:foo"
     assert record["status"] == "update-ready"
     with pytest.raises(Invalid, match="latest.ref"):
+        append(root, record, client)
+    assert path.read_bytes() == before
+
+
+def test_shared_resources_append_again_without_changing_old_references(index):
+    root, path = index
+    client = FakeGitHub()
+    assert append(root, check_package(package_info(path, root), client), client)
+    first = path.read_text()
+    client.releases = [{"tag_name": "v1.2.0"}]
+    record = check_package(package_info(path, root), client)
+    assert record["current"] == "1.1.0"
+    assert append(root, record, client)
+    second = path.read_text()
+    assert_preserved(first, second)
+    assert second.count("local versions =") == 1
+    assert second.count('v1.2.0.tar.gz') == 1
+    info = package_info(path, root)
+    for platform in info["platforms"].values():
+        assert platform["entries"]["1.2.0"].plain()["sha256"] == "b" * 64
+
+
+def test_shared_definition_is_immutable_even_if_references_do_not_change(index):
+    root, path = index
+    client = FakeGitHub()
+    append(root, check_package(package_info(path, root), client), client)
+    before = path.read_text()
+    with pytest.raises(Invalid, match="existing version changed"):
+        assert_preserved(before, before.replace("b" * 64, "c" * 64))
+
+
+@pytest.mark.parametrize("mutation", [
+    'versions["1.1.0"].sha256 = "changed"',
+    'versions = {}',
+    'local versions = {}',
+    'mutate(versions)',
+    'package.xpm.linux["1.1.0"].sha256 = "changed"',
+])
+def test_shared_tables_reject_mutation_and_rebinding(index, mutation):
+    root, path = index
+    client = FakeGitHub()
+    append(root, check_package(package_info(path, root), client), client)
+    with pytest.raises(Invalid, match="shared"):
+        parse(path.read_text() + mutation)
+
+
+def test_whole_platform_table_can_be_shared(index):
+    root, path = index
+    body = descriptor()
+    node = parse(body).fields["xpm"]
+    shared = body[node.fields["linux"].start:node.fields["linux"].end]
+    body = body[:node.start] + '{ linux = versions, macosx = versions, windows = versions }' + body[node.end:]
+    path.write_text('local versions = ' + shared + '\n' + body)
+    before = path.read_text()
+    client = FakeGitHub()
+    assert append(root, check_package(package_info(path, root), client), client)
+    assert path.read_text().count('["1.1.0"]') == 1
+    assert_preserved(before, path.read_text())
+
+
+def test_platform_specific_resources_stay_separate(index):
+    root, path = index
+    source = descriptor().replace(
+        'url = "https://github.com/acme/foo/archive/refs/tags/${tag}.tar.gz",',
+        'url = { linux = "https://github.com/acme/foo/${tag}/linux.tar.gz", '
+        'macosx = "https://github.com/acme/foo/${tag}/macos.tar.gz", '
+        'windows = "https://github.com/acme/foo/${tag}/windows.zip" },')
+    # Keep the existing source mapping explicit so discovery can follow it.
+    for platform, suffix in (("linux", "linux.tar.gz"), ("macosx", "macos.tar.gz"), ("windows", "windows.zip")):
+        node = parse(source).fields["xpm"].fields[platform].fields["1.0.0"].fields["url"]
+        source = source[:node.start] + json.dumps(f"https://github.com/acme/foo/v1.0.0/{suffix}") + source[node.end:]
+    path.write_text(source)
+    client = FakeGitHub()
+    record = check_package(package_info(path, root), client)
+    assert append(root, record, client)
+    assert not path.read_text().startswith('local versions')
+    assert_preserved(source, path.read_text())
+
+
+def test_shared_resources_avoid_colliding_with_hook_locals(index):
+    root, path = index
+    path.write_text(descriptor(extra='local versions = {}'))
+    client = FakeGitHub()
+    assert append(root, check_package(package_info(path, root), client), client)
+    assert path.read_text().startswith('local xpkg_versions =')
+
+
+def test_unresolvable_shared_prefix_never_writes(index):
+    root, path = index
+    path.write_text('import("something")\n' + descriptor())
+    before = path.read_bytes()
+    client = FakeGitHub()
+    record = check_package(package_info(path, root), client)
+    with pytest.raises(Invalid):
         append(root, record, client)
     assert path.read_bytes() == before

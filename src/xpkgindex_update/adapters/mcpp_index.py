@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from ..github import GitHub
-from ..lua_edit import Invalid
+from ..lua_edit import Invalid, parse, tokens
 from ..manifest import (
     assert_preserved,
     descriptor_digest,
@@ -19,6 +19,14 @@ from ..manifest import (
     validate_config,
     version_key,
 )
+
+
+def ordered_resource(key, node):
+    try:
+        version_key(key)
+        return node.kind == "table" and set(node.fields) == {"url", "sha256"}
+    except Invalid:
+        return False
 
 
 def append(root: Path, record: dict, github: GitHub) -> bool:
@@ -49,7 +57,7 @@ def append(root: Path, record: dict, github: GitHub) -> bool:
         raise Invalid("plan platform matrix mismatch")
     if github.commit(record["repo"], record["tag"]) != record["upstream_commit"]:
         raise Invalid("upstream tag moved since check")
-    edits = []
+    validated = []
     for plat, platform in info["platforms"].items():
         if "latest" in platform["node"].fields:
             raise Invalid("latest.ref update policy is not enabled; version blocks remain append-only")
@@ -70,37 +78,86 @@ def append(root: Path, record: dict, github: GitHub) -> bool:
         hashes = {r["sha256"] for r in resources.values()}
         if len(hashes) != 1:
             raise Invalid("mirror content conflict")
-        node = platform["node"]
+        validated.append((platform["node"].definition(), resources))
+
+    edits = []
+
+    def quote(value):
+        return json.dumps(value, ensure_ascii=True)
+
+    def insert(node, value):
         close = node.end - 1
         line = text.rfind("\n", 0, close) + 1
         if text[line:close].strip():
-            position, indent = close, "    "
-            lead = "\n"
-            tail = "\n"
+            position, indent, lead, tail = close, "    ", "\n", "\n"
         else:
-            position = line
-            indent = text[line:close] + "    "
-            lead = tail = ""
-        last = max(node.fields.values(), key=lambda n: n.end)
-        between = text[last.end:close]
-        # Separators belong to the platform table, not to the immutable old value.
-        if not re.match(r"\s*[,;]", between):
-            edits.append((last.end, ","))
-        def quote(value):
-            return json.dumps(value, ensure_ascii=True)
-        if isinstance(spec, dict):
-            url_line = "{ " + ", ".join(f"{r} = {quote(a['url'])}" for r, a in resources.items()) + " }"
+            position, indent, lead, tail = line, text[line:close] + "    ", "", ""
+        if node.fields:
+            last = max(node.fields.values(), key=lambda n: n.end)
+            if not re.match(r"\s*[,;]", text[last.end:close]):
+                edits.append((last.end, ","))
+        edits.append((position, lead + value(indent) + "\n" + tail))
+
+    def resource_value(resources, indent):
+        urls = {region: resource["url"] for region, resource in resources.items()}
+        url = quote(urls["GLOBAL"]) if set(urls) == {"GLOBAL"} else (
+            "{ " + ", ".join(f"{key} = {quote(value)}" for key, value in urls.items()) + " }")
+        digest = next(iter(resources.values()))["sha256"]
+        return (f"{{\n{indent}    url = {url},\n"
+                f"{indent}    sha256 = {quote(digest)},\n{indent}}}")
+
+    # A shared whole-platform table is edited once. Different assets cannot
+    # be represented by that table, so refuse instead of changing old aliases.
+    unique = {}
+    for node, resources in validated:
+        if node.start in unique and unique[node.start][1] != resources:
+            raise Invalid("shared platform table requires identical resources")
+        unique[node.start] = (node, resources)
+    same = len(validated) > 1 and all(resources == validated[0][1] for _, resources in validated)
+    if same and len(unique) > 1:
+        # Reuse an existing resource-only local table already referenced by a
+        # version entry. Otherwise add one without rewriting historical rows.
+        shared = None
+        for name, table in info["bindings"].items():
+            if (table.fields and all(ordered_resource(key, value) for key, value in table.fields.items())
+                    and any(entry.reference is value for value in table.fields.values()
+                            for platform in info["platforms"].values()
+                            for entry in platform["entries"].values())):
+                shared = (name, table)
+                break
+        resources = validated[0][1]
+        if shared:
+            name, table = shared
+            if candidate in table.fields:
+                raise Invalid("candidate already exists in the shared resource table")
+            insert(table, lambda indent: f"{indent}[{quote(candidate)}] = "
+                   + resource_value(resources, indent) + ",")
         else:
-            url_line = quote(resources["GLOBAL"]["url"])
-        block = (f"{lead}{indent}[{quote(candidate)}] = {{\n"
-                 f"{indent}    url = {url_line},\n"
-                 f"{indent}    sha256 = {quote(next(iter(hashes)))},\n"
-                 f"{indent}}},\n{tail}")
-        edits.append((position, block))
+            names = {token.value for token in tokens(text) if token.kind == "word"}
+            name = "versions"
+            while name in names:
+                name = "xpkg_" + name
+            definition = (f"local {name} = {{\n    [{quote(candidate)}] = "
+                          + resource_value(resources, "    ") + ",\n}\n\n")
+            edits.append((0, definition))
+        for node, _ in unique.values():
+            insert(node, lambda indent: f"{indent}[{quote(candidate)}] = {name}[{quote(candidate)}],")
+    else:
+        for node, resources in unique.values():
+            insert(node, lambda indent, resources=resources:
+                   f"{indent}[{quote(candidate)}] = " + resource_value(resources, indent) + ",")
     updated = text
     for position, value in sorted(edits, reverse=True):
         updated = updated[:position] + value + updated[position:]
     assert_preserved(text, updated)
+    platforms = parse(updated).table()["xpm"].table()
+    for plat, resources in asset_map.items():
+        urls = {key: resource["url"] for key, resource in resources.items()}
+        expected = {"url": urls["GLOBAL"] if set(urls) == {"GLOBAL"} else urls,
+                    "sha256": next(iter(resources.values()))["sha256"]}
+        entry = platforms[plat].table().get(candidate)
+        if entry is None or entry.plain() != expected:
+            raise Invalid("generated version does not resolve to the verified resource")
     # Atomic replacement only after every platform and download has been checked.
     temporary = path.with_name(path.name + ".xpkgindex-update.tmp")
     try:

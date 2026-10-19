@@ -86,6 +86,11 @@ class Node:
     value: object = None
     fields: dict[str, Node] = field(default_factory=dict)
     kind: str = "literal"
+    reference: Node | None = None
+    bindings: dict[str, Node] = field(default_factory=dict)
+
+    def definition(self) -> Node:
+        return self.reference.definition() if self.reference else self
 
     def table(self) -> dict[str, Node]:
         if self.kind != "table":
@@ -109,6 +114,10 @@ class Parser:
     def __init__(self, text: str):
         self.ts = tokens(text)
         self.i = 0
+        self.bindings: dict[str, Node] = {}
+        self.declarations: set[int] = set()
+        self.reads: set[int] = set()
+        self.used: set[str] = set()
 
     def expression(self) -> Node:
         start = self.i
@@ -128,6 +137,20 @@ class Parser:
         if self.i == start or depth:
             raise Invalid("invalid Lua expression")
         chunk = self.ts[start:self.i]
+        target = None
+        if chunk[0].kind == "word" and chunk[0].value in self.bindings:
+            if len(chunk) == 1:
+                target = self.bindings[chunk[0].value]
+            elif (len(chunk) == 4 and chunk[1].value == "["
+                  and chunk[2].kind == "string" and chunk[3].value == "]"):
+                target = self.bindings[chunk[0].value].table().get(chunk[2].value)
+                if target is None:
+                    raise Invalid("missing shared table entry")
+            if target is not None:
+                self.used.add(chunk[0].value)
+                self.reads.add(chunk[0].start)
+                return Node(chunk[0].start, chunk[-1].end, target.value,
+                            fields=target.fields, kind=target.kind, reference=target)
         if len(chunk) == 1:
             t = chunk[0]
             if t.kind == "string":
@@ -175,9 +198,38 @@ class Parser:
 
     def package(self) -> Node:
         for i in range(len(self.ts) - 2):
-            if [t.value for t in self.ts[i:i + 3]] == ["package", "=", "{"]:
-                self.i = i + 2
-                return self.table()
+            if (self.ts[i].kind != "word" or
+                    [t.value for t in self.ts[i:i + 3]] != ["package", "=", "{"]):
+                continue
+            # Only a prefix of literal local table declarations can supply
+            # shared metadata. Nothing is executed, imported or evaluated.
+            self.i = 0
+            while self.i < i:
+                if self.ts[self.i].value == ";":
+                    self.i += 1
+                    continue
+                prefix = self.ts[self.i:self.i + 4]
+                if (len(prefix) != 4 or prefix[0].value != "local" or
+                        prefix[1].kind != "word" or prefix[2].value != "=" or prefix[3].value != "{"):
+                    self.bindings.clear()
+                    break
+                name = prefix[1]
+                if name.value in self.bindings:
+                    raise Invalid("ambiguous shared table declaration")
+                self.declarations.add(name.start)
+                self.i += 3
+                self.bindings[name.value] = self.table()
+            self.i = i + 2
+            node = self.table()
+            for token in self.ts:
+                if (token.kind == "word" and token.value in self.used and
+                        token.start not in self.declarations | self.reads):
+                    raise Invalid("shared tables must not be mutated, rebound or used outside literal references")
+            if self.used and any(token.kind == "word" and token.value == "package" and
+                                 token.start >= node.end for token in self.ts):
+                raise Invalid("shared metadata cannot have later package access or mutation")
+            node.bindings = self.bindings
+            return node
         raise Invalid("missing package literal")
 
 

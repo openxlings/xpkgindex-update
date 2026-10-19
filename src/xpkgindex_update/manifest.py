@@ -60,7 +60,8 @@ def package_info(path: Path, root: Path) -> dict:
     if not path.is_relative_to(root / "pkgs"):
         raise Invalid("descriptor is outside pkgs")
     text = path.read_bytes().decode("utf-8")
-    pkg = parse(text).table()
+    root_node = parse(text)
+    pkg = root_node.table()
     namespace = pkg.get("namespace")
     identity = (namespace.string() if namespace else "mcpplibs") + ":" + pkg["name"].string()
     extension = pkg.get("extensions")
@@ -85,7 +86,7 @@ def package_info(path: Path, root: Path) -> dict:
             if url and url.kind == "string" and url.string().startswith("https://github.com/"):
                 direct.append({"platform": plat, "version": version, "url": url.string()})
     return {"id": identity, "path": path.relative_to(root).as_posix(), "text": text,
-            "package": pkg, "platforms": platforms, "direct": direct,
+            "package": pkg, "bindings": root_node.bindings, "platforms": platforms, "direct": direct,
             "autoupdate": auto.plain() if auto else None}
 
 
@@ -245,13 +246,28 @@ def inventory(root: Path) -> list[dict]:
     return [package_info(p, root) for p in sorted((root / "pkgs").glob("*/*.lua"))]
 
 
+def source_value(text: str, node: Node) -> str:
+    """Keep both a reference spelling and the resource it actually resolves to."""
+    raw = text[node.start:node.end]
+    if node.reference:
+        return raw + "\0" + source_value(text, node.reference)
+    # Literal tables may themselves contain references (e.g. a shared URL map).
+    references = [(key, source_value(text, value)) for key, value in node.fields.items()
+                  if value.reference or any_reference(value)]
+    return raw + (repr(references) if references else "")
+
+
+def any_reference(node: Node) -> bool:
+    return bool(node.reference) or any(any_reference(value) for value in node.fields.values())
+
+
 def version_blocks(text: str) -> dict[str, dict[str, str]]:
     pkg = parse(text).table()
     out = {}
     for plat in PLATFORMS:
         node: Node | None = pkg["xpm"].fields.get(plat)
         if node:
-            out[plat] = {key: text[value.start:value.end] for key, value in node.fields.items()
+            out[plat] = {key: source_value(text, value) for key, value in node.fields.items()
                          if ordered(key) or re.match(r"^(?:\d|b\d)", key)}
     return out
 
