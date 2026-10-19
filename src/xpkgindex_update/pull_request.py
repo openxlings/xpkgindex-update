@@ -38,13 +38,15 @@ def propose(root, plan, github, *, base=None, draft=False, limit=3) -> list[dict
         identity = record["id"]
         slug = re.sub(r"[^a-zA-Z0-9._-]", "-", identity)
         branch = f"auto/bump-{slug}-{record['candidate']}"
-        prs = json.loads(run("gh", "pr", "list", "--state", "all", "--limit", "100",
+        prs = json.loads(run("gh", "pr", "list", "--state", "open", "--limit", "1000",
                              "--json", "headRefName,state,url", cwd=root, env=env))
         same_package = [p for p in prs if p["headRefName"].startswith(f"auto/bump-{slug}-")]
         if any(p["state"] == "OPEN" for p in same_package):
             outcomes.append({"id": identity, "status": "pending"})
             continue
-        if any(p["headRefName"] == branch for p in same_package):
+        history = json.loads(run("gh", "pr", "list", "--state", "all", "--head", branch,
+                                 "--json", "headRefName,state,url", cwd=root, env=env))
+        if history:
             outcomes.append({"id": identity, "status": "dismissed"})
             continue
         if sum(o["status"] == "created" for o in outcomes) >= limit:

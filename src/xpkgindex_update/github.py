@@ -65,6 +65,10 @@ class GitHub:
                 if exc.code not in (429, 500, 502, 503, 504) or attempt == 2:
                     raise
                 time.sleep(2 ** attempt)
+            except (urllib.error.URLError, TimeoutError):
+                if attempt == 2:
+                    raise
+                time.sleep(2 ** attempt)
 
     def listing(self, repo: str, kind: str) -> list[dict]:
         result = []
@@ -79,6 +83,19 @@ class GitHub:
         return self.api(f"repos/{repo}/commits/{urllib.parse.quote(tag, safe='')}")["sha"]
 
     def artifact(self, url: str) -> dict:
+        for attempt in range(3):
+            try:
+                return self._artifact_once(url)
+            except urllib.error.HTTPError as exc:
+                if exc.code not in (429, 500, 502, 503, 504) or attempt == 2:
+                    raise
+            except (urllib.error.URLError, TimeoutError, socket.gaierror):
+                if attempt == 2:
+                    raise
+            time.sleep(2 ** attempt)
+        raise Invalid("artifact retry limit exceeded")
+
+    def _artifact_once(self, url: str) -> dict:
         if url in self.digests:
             return self.digests[url]
         public_url(url)
