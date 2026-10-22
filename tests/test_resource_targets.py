@@ -137,3 +137,19 @@ def test_simple_source_infers_numeric_and_v_tags(tmp_path, tag):
     index = setup(tmp_path, {'GLOBAL': 'https://global.example/${tag}/foo.zip'})
     client = FakeGitHub(releases=[{'tag_name': tag}])
     assert check(index, client)['candidate'] == '1.5.0'
+
+
+def test_numeric_upstream_builds_keep_their_identity_and_order(tmp_path):
+    from xpkgindex_update.manifest import expand, tag_version
+    assert tag_version('jdk-${version}', 'jdk-25.0.4+7') == '25.0.4+7'
+    assert xim.version_key('25.0.4+8') > xim.version_key('25.0.4+7')
+    assert xim.version_key('25.0.4+7') > xim.version_key('25.0.4')
+    assert expand('${version:base}_${version:build}', '25.0.4+7', 'jdk-25.0.4+7') == '25.0.4_7'
+
+
+def test_manual_newer_architecture_cannot_be_dropped(tmp_path):
+    root, path = setup(tmp_path)
+    text = path.read_text().replace('["0.9.0"] = { url = "historical-linux-only", sha256 = "immutable" }', '["1.2.0"] = { x86_64 = {url="manual",sha256="old"}, aarch64={url="manual-arm",sha256="old"} }')
+    path.write_text(text)
+    result = check((root, path), Client())
+    assert result['status'] == 'error' and 'architecture set changed' in result['reason']

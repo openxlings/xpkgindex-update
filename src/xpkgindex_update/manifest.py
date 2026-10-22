@@ -43,7 +43,9 @@ def ordered(version: str) -> bool:
 
 
 def expand(template: str, version: str, tag: str) -> str:
-    value = template.replace("${version:compact}", version.replace(".", ""))
+    base, _, build = version.partition("+")
+    value = template.replace("${version:base}", base).replace("${version:build}", build)
+    value = value.replace("${version:compact}", version.replace(".", ""))
     value = value.replace("${version}", version).replace("${tag}", tag)
     if "${" in value:
         raise Invalid(f"unknown URL placeholder: {template}")
@@ -59,7 +61,7 @@ def tag_version(template: str, tag: str) -> str | None:
         raise Invalid("tag must have exactly one version placeholder")
     left, right = template.split(slot)
     separator = "-" if slot.endswith(":dash}") else "_" if slot.endswith(":underscore}") else None
-    grammar = rf"([0-9]+(?:{separator}[0-9]+)*)" if separator else r"(b?[0-9]+(?:\.[0-9]+)*[a-z]?)"
+    grammar = rf"([0-9]+(?:{separator}[0-9]+)*)" if separator else r"(b?[0-9]+(?:\.[0-9]+)*[a-z]?(?:\+[0-9]+)?)"
     match = re.fullmatch(re.escape(left) + grammar + re.escape(right), tag)
     if not match:
         return None

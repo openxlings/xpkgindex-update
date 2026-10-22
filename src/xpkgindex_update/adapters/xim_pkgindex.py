@@ -15,11 +15,19 @@ from ..manifest import (
     expand,
     ordered,
     tag_version,
-    version_key,
+)
+from ..manifest import (
+    version_key as release_key,
 )
 
 FORMAT = 2
 ARCHES = {'x86_64', 'aarch64', 'x86', 'armv7', 'riscv64'}
+
+
+def version_key(version):
+    # A numeric upstream build is part of the index identity (e.g. JDK +7).
+    build = version.partition('+')[2]
+    return (*release_key(version), int(build) if build.isdigit() else -1)
 
 
 def package_info(path: Path, root: Path) -> dict:
@@ -147,7 +155,9 @@ def validate_config(info):
         raise Invalid('no versioned platforms')
     refs = latest_refs(info)
     for plat, arches in matrix(info).items():
-        expected = entry_arches(info['platforms'][plat]['entries'][refs[plat]])
+        entries = info['platforms'][plat]['entries']
+        newest = max((v for v in entries if ordered(v)), key=version_key)
+        expected = entry_arches(entries[newest]) or entry_arches(entries[refs[plat]])
         if expected and set(arches) != expected:
             raise Invalid(f'architecture set changed for {plat}: {sorted(expected)} -> {sorted(arches)}')
         if not expected and len(arches) > 1:
