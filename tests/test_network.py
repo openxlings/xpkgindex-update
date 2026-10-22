@@ -4,7 +4,7 @@ import urllib.error
 
 import pytest
 
-from xpkgindex_update.github import GitHub, WaitingAssets, public_url
+from xpkgindex_update.github import BudgetExceeded, GitHub, WaitingAssets, public_url
 from xpkgindex_update.lua_edit import Invalid
 
 
@@ -74,3 +74,45 @@ def test_html_is_not_an_artifact(monkeypatch):
     monkeypatch.setattr("urllib.request.build_opener", lambda *a: Opener())
     with pytest.raises(Invalid, match="HTML"):
         GitHub().artifact("https://example.org/a.zip")
+
+
+def test_ephemeral_redirect_queries_do_not_enter_fixed_plans(monkeypatch):
+    class Response(io.BytesIO):
+        def geturl(self):
+            return 'https://release-assets.githubusercontent.com/archive?signature=ephemeral'
+    class Opener:
+        def open(self, request, timeout):
+            return Response(b'PKfixture')
+    monkeypatch.setattr('xpkgindex_update.github.public_url', lambda u: u)
+    monkeypatch.setattr('urllib.request.build_opener', lambda *a: Opener())
+    resource = GitHub().artifact('https://example.org/a.zip')
+    assert resource['final_host'] == 'release-assets.githubusercontent.com'
+    assert 'ephemeral' not in str(resource)
+
+
+def test_absent_mirror_backtracking_consumes_the_request_budget(monkeypatch):
+    class Opener:
+        def open(self, request, timeout):
+            raise urllib.error.HTTPError(request.full_url, 404, 'missing', {}, None)
+    monkeypatch.setattr('xpkgindex_update.github.public_url', lambda u: u)
+    monkeypatch.setattr('urllib.request.build_opener', lambda *a: Opener())
+    client = GitHub(request_budget=2)
+    for version in ['3', '2']:
+        with pytest.raises(WaitingAssets):
+            client.artifact('https://mirror.example/' + version + '.zip')
+    with pytest.raises(BudgetExceeded):
+        client.artifact('https://mirror.example/1.zip')
+    assert client.requests == 2
+
+
+def test_sidecar_and_artifact_share_the_run_request_budget(monkeypatch):
+    class Opener:
+        def open(self, request, timeout):
+            return io.BytesIO(b'PKfixture')
+    monkeypatch.setattr('xpkgindex_update.github.public_url', lambda u: u)
+    monkeypatch.setattr('urllib.request.build_opener', lambda *a: Opener())
+    client = GitHub(request_budget=1)
+    client.artifact('https://mirror.example/a.zip')
+    assert client.artifact('https://mirror.example/a.zip')  # cache hits are free
+    with pytest.raises(BudgetExceeded):
+        client.text('https://mirror.example/a.zip.sha256')

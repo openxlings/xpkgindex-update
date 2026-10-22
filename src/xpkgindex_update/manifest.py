@@ -18,13 +18,20 @@ def descriptor_digest(text: str) -> str:
 
 
 def version_key(version: str) -> tuple:
-    match = re.fullmatch(r"(b?)([0-9]+(?:\.[0-9]+)*)([a-z]?)", version)
+    if re.search(r"-[0-9a-f]{7,40}$", version):
+        raise Invalid(f"commit snapshot has no release ordering: {version}")
+    match = re.fullmatch(r"(b?)([0-9]+(?:\.[0-9]+)*)([a-z]?)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?", version)
     if not match:
         raise Invalid(f"not an ordered release version: {version}")
     parts = [int(x) for x in match[2].split(".")]
     while len(parts) > 1 and parts[-1] == 0:
         parts.pop()
-    return match[1], tuple(parts), match[3]
+    if match[4]:
+        prerelease = tuple((0, int(p)) if p.isdigit() else (1, p) for p in match[4].split("."))
+        suffix = (-1, prerelease)
+    else:
+        suffix = (1 if match[3] else 0, match[3])
+    return match[1], tuple(parts), suffix
 
 
 def ordered(version: str) -> bool:
@@ -36,22 +43,29 @@ def ordered(version: str) -> bool:
 
 
 def expand(template: str, version: str, tag: str) -> str:
-    value = template.replace("${version}", version).replace("${tag}", tag)
+    base, _, build = version.partition("+")
+    value = template.replace("${version:base}", base).replace("${version:build}", build)
+    value = value.replace("${version:compact}", version.replace(".", ""))
+    value = value.replace("${version}", version).replace("${tag}", tag)
     if "${" in value:
         raise Invalid(f"unknown URL placeholder: {template}")
     return value
 
 
 def tag_version(template: str, tag: str) -> str | None:
-    slot = "${version:dash}" if "${version:dash}" in template else "${version}"
+    slots = [s for s in ("${version}", "${version:dash}", "${version:underscore}") if s in template]
+    if len(slots) != 1:
+        raise Invalid("tag must have exactly one version placeholder")
+    slot = slots[0]
     if template.count(slot) != 1 or "${" in template.replace(slot, ""):
-        raise Invalid("tag must have exactly one ${version} or ${version:dash}")
+        raise Invalid("tag must have exactly one version placeholder")
     left, right = template.split(slot)
-    grammar = r"([0-9]+(?:-[0-9]+)*)" if slot.endswith(":dash}") else r"(b?[0-9]+(?:\.[0-9]+)*[a-z]?)"
+    separator = "-" if slot.endswith(":dash}") else "_" if slot.endswith(":underscore}") else None
+    grammar = rf"([0-9]+(?:{separator}[0-9]+)*)" if separator else r"(b?[0-9]+(?:\.[0-9]+)*[a-z]?(?:\+[0-9]+)?)"
     match = re.fullmatch(re.escape(left) + grammar + re.escape(right), tag)
     if not match:
         return None
-    return match[1].replace("-", ".") if slot.endswith(":dash}") else match[1]
+    return match[1].replace(separator, ".") if separator else match[1]
 
 
 def package_info(path: Path, root: Path) -> dict:
@@ -296,3 +310,27 @@ def assert_preserved(before: str, after: str) -> None:
         for version, raw in entries.items():
             if new[plat][version] != raw:
                 raise Invalid(f"existing version changed: {plat}/{version}")
+
+
+def runtime_signature(text: str):
+    """Compare runtime inputs; only known CI-only declarations are excluded."""
+    node = parse(text)
+    def value(n, path):
+        if n.kind == "table":
+            fields = {}
+            for key, child in n.fields.items():
+                if not path and key == "ci":
+                    continue
+                if path == ("extensions",) and key == "autoupdate":
+                    continue
+                if path and path[0] == "xpm" and len(path) <= 2 and key in ("url_template", "res_versioned"):
+                    continue
+                item = value(child, (*path, key))
+                if path == () and key == "extensions" and item == ("table", {}):
+                    continue
+                fields[key] = item
+            return "table", fields
+        if n.kind == "expr":
+            return "expr", text[n.start:n.end]
+        return n.kind, n.value
+    return value(node, ()), text[:node.start], text[node.end:]

@@ -15,6 +15,10 @@ import urllib.request
 from .lua_edit import Invalid
 
 
+class BudgetExceeded(Invalid):
+    pass
+
+
 class WaitingAssets(Exception):
     pass
 
@@ -38,24 +42,30 @@ class PublicRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class GitHub:
-    def __init__(self, token: str | None = None):
+    def __init__(self, token: str | None = None, *, request_budget=500, resource_bytes=512 * 1024**2, download_bytes=4 * 1024**3):
         self.token = token or os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+        self.request_budget = request_budget
+        self.resource_bytes = resource_bytes
+        self.download_bytes = download_bytes
         self.cache = {}
         self.digests = {}
         self.requests = 0
         self.downloaded = 0
 
+    def charge_request(self):
+        if self.requests >= self.request_budget:
+            raise BudgetExceeded("run request budget exhausted")
+        self.requests += 1
+
     def api(self, path: str):
         if path in self.cache:
             return self.cache[path]
-        if self.requests >= 500:
-            raise Invalid("GitHub request budget (500) exhausted")
-        self.requests += 1
         headers = {"Accept": "application/vnd.github+json", "User-Agent": "xpkgindex-update"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         req = urllib.request.Request("https://api.github.com/" + path, headers=headers)
         for attempt in range(3):
+            self.charge_request()
             try:
                 with urllib.request.urlopen(req, timeout=45) as response:
                     result = json.load(response)
@@ -72,12 +82,12 @@ class GitHub:
 
     def listing(self, repo: str, kind: str) -> list[dict]:
         result = []
-        for page in range(1, 21):
+        for page in range(1, self.request_budget + 1):
             batch = self.api(f"repos/{repo}/{kind}?per_page=100&page={page}")
             result.extend(batch)
             if len(batch) < 100:
                 return result
-        raise Invalid(f"discovery-incomplete: {repo}/{kind} exceeds 2000 entries")
+        raise BudgetExceeded(f"discovery-incomplete: {repo}/{kind} exceeded the request budget")
 
     def commit(self, repo: str, tag: str) -> str:
         return self.api(f"repos/{repo}/commits/{urllib.parse.quote(tag, safe='')}")["sha"]
@@ -98,6 +108,9 @@ class GitHub:
     def _artifact_once(self, url: str) -> dict:
         if url in self.digests:
             return self.digests[url]
+        if self.downloaded >= self.download_bytes:
+            raise BudgetExceeded("run download budget exhausted")
+        self.charge_request()
         public_url(url)
         request = urllib.request.Request(url, headers={"User-Agent": "xpkgindex-update"})
         digest = hashlib.sha256()
@@ -105,14 +118,15 @@ class GitHub:
         opener = urllib.request.build_opener(PublicRedirect())
         try:
             with opener.open(request, timeout=180) as response:
+                final_url = response.geturl() if hasattr(response, "geturl") else url
                 head = b""
                 while chunk := response.read(1024 * 1024):
                     if not head:
                         head = chunk[:512]
                     size += len(chunk)
                     self.downloaded += len(chunk)
-                    if size > 512 * 1024 * 1024 or self.downloaded > 4 * 1024 ** 3:
-                        raise Invalid("resource exceeds 512 MiB / run exceeds 4 GiB download budget")
+                    if size > self.resource_bytes or self.downloaded > self.download_bytes:
+                        raise BudgetExceeded("resource or run download budget exhausted")
                     digest.update(chunk)
         except urllib.error.HTTPError as exc:
             if exc.code in (404, 410):
@@ -122,8 +136,38 @@ class GitHub:
             raise Invalid(f"empty or HTML artifact: {url}")
         if url.endswith((".tar.gz", ".tgz")) and not head.startswith(b"\x1f\x8b"):
             raise Invalid(f"not a gzip archive: {url}")
+        if url.endswith(".tar.xz") and not head.startswith(b"\xfd7zXZ\x00"):
+            raise Invalid(f"not an XZ archive: {url}")
+        if url.endswith(".tar.bz2") and not head.startswith(b"BZh"):
+            raise Invalid(f"not a bzip2 archive: {url}")
         if url.endswith(".zip") and not head.startswith(b"PK"):
             raise Invalid(f"not a ZIP archive: {url}")
-        result = {"url": url, "size": size, "sha256": digest.hexdigest()}
+        result = {"url": url, "final_host": urllib.parse.urlsplit(final_url).hostname, "size": size, "sha256": digest.hexdigest()}
         self.digests[url] = result
         return result
+
+    def text(self, url: str) -> str:
+        """Fetch a bounded public sidecar, never send API credentials."""
+        public_url(url)
+        request = urllib.request.Request(url, headers={"User-Agent": "xpkgindex-update"})
+        for attempt in range(3):
+            self.charge_request()
+            try:
+                with urllib.request.build_opener(PublicRedirect()).open(request, timeout=45) as response:
+                    payload = response.read(65537)
+                self.downloaded += len(payload)
+                if len(payload) > 65536:
+                    raise Invalid("sidecar exceeds 64 KiB")
+                if self.downloaded > self.download_bytes:
+                    raise BudgetExceeded("run download budget exhausted")
+                return payload.decode("utf-8")
+            except urllib.error.HTTPError as exc:
+                if exc.code in (404, 410):
+                    raise WaitingAssets(url) from exc
+                if exc.code not in (429, 500, 502, 503, 504) or attempt == 2:
+                    raise
+            except (urllib.error.URLError, TimeoutError):
+                if attempt == 2:
+                    raise
+            time.sleep(2 ** attempt)
+        raise Invalid("sidecar retry limit exceeded")

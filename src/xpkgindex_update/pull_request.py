@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from .adapters.mcpp_index import append
+from .adapters import get_adapter
 from .lua_edit import Invalid
 
 
@@ -39,13 +39,13 @@ def propose(root, plan, github, *, base=None, draft=False, limit=3) -> list[dict
         slug = re.sub(r"[^a-zA-Z0-9._-]", "-", identity)
         branch = f"auto/bump-{slug}-{record['candidate']}"
         prs = json.loads(run("gh", "pr", "list", "--state", "open", "--limit", "1000",
-                             "--json", "headRefName,state,url,files", cwd=root, env=env))
+                             "--base", base, "--json", "headRefName,state,url,files", cwd=root, env=env))
         same_package = [p for p in prs if p["headRefName"].startswith(f"auto/bump-{slug}-")
                         or any(f["path"] == record["path"] for f in p.get("files", []))]
         if same_package:
             outcomes.append({"id": identity, "status": "pending", "url": same_package[0]["url"]})
             continue
-        history = json.loads(run("gh", "pr", "list", "--state", "all", "--head", branch,
+        history = json.loads(run("gh", "pr", "list", "--state", "all", "--head", branch, "--base", base,
                                  "--json", "headRefName,state,url", cwd=root, env=env))
         if history:
             outcomes.append({"id": identity, "status": "dismissed"})
@@ -56,7 +56,7 @@ def propose(root, plan, github, *, base=None, draft=False, limit=3) -> list[dict
             work = (Path(directory) / "work").resolve()
             run("git", "worktree", "add", "--detach", str(work), base_sha, cwd=root)
             try:
-                changed = append(work, record, github)
+                changed = get_adapter(plan.get("adapter", "mcpp-index")).append(work, record, github)
                 if not changed:
                     continue
                 remote = run("git", "ls-remote", "--heads", "origin", branch, cwd=work, env=env)
@@ -81,6 +81,10 @@ def propose(root, plan, github, *, base=None, draft=False, limit=3) -> list[dict
                 body.write_text(
                     f"Append `{identity}@{record['candidate']}`. Existing versions are unchanged.\n\n"
                     f"Upstream: `{record['repo']}@{record['tag']}` (`{record['upstream_commit']}`).\n\n"
+                    f"Plan base: `{plan['base_commit']}`; format `{plan.get('format', 1)}`; adapter `{plan.get('adapter', 'mcpp-index')}`.\n\n"
+                    f"Latest policy: `{record.get('latest_policy', 'mcpp append-only')}`; "
+                    f"before `{record.get('latest_before', record.get('current', 'unchanged'))}`; "
+                    f"after `{record.get('latest_after', 'unchanged')}`.\n\n"
                     "Resources and computed SHA256:\n\n```json\n" +
                     json.dumps(record["assets"], indent=2) + "\n```\n\n"
                     "The index CI must build and resolve the candidate version before merge.\n")
