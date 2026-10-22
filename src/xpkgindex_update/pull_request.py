@@ -81,6 +81,10 @@ def propose(root, plan, github, *, base=None, draft=False, limit=3) -> list[dict
                 body.write_text(
                     f"Append `{identity}@{record['candidate']}`. Existing versions are unchanged.\n\n"
                     f"Upstream: `{record['repo']}@{record['tag']}` (`{record['upstream_commit']}`).\n\n"
+                    f"Plan base: `{plan['base_commit']}`; format `{plan.get('format', 1)}`; adapter `{plan.get('adapter', 'mcpp-index')}`.\n\n"
+                    f"Latest policy: `{record.get('latest_policy', 'mcpp append-only')}`; "
+                    f"before `{record.get('latest_before', record.get('current', 'unchanged'))}`; "
+                    f"after `{record.get('latest_after', 'unchanged')}`.\n\n"
                     "Resources and computed SHA256:\n\n```json\n" +
                     json.dumps(record["assets"], indent=2) + "\n```\n\n"
                     "The index CI must build and resolve the candidate version before merge.\n")
