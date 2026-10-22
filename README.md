@@ -29,6 +29,12 @@ autoupdate = {
 }
 ```
 
+Place this declaration in `package.extensions`; new xim packages can copy it
+and replace the source and asset URLs with verified project paths. We recommend
+upstream GitHub repositories with **at least 50 stars** for automatic updates.
+This is contributor guidance, not a threshold enforced by the CLI or index CI.
+Use the [xim onboarding checklist](docs/usage.md#new-xim-packages) before opting in.
+
 Add `CN = { url = "https://verified-mirror/.../${version}/...", required = true }`
 when a verified mirror exists. The newest version must satisfy every required target.
 

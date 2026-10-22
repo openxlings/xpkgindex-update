@@ -125,6 +125,31 @@ CI tests Python 3.11/3.13 on Linux, macOS and Windows, plus the composite Action
 
 MIT.
 
+## New xim packages
+
+Copy the xim declaration below into the `package` table, merging its
+`extensions.autoupdate` field with any existing extensions. Replace the example owner/project and asset paths with verified values. We recommend
+upstream GitHub repositories with **at least 50 stars**; this is guidance, not
+an eligibility check in the updater. Popularity does not establish artifact integrity.
+
+Use a string when every platform consumes the same artifact; otherwise declare
+an explicit matrix matching every supported platform/architecture. `${tag}` keeps
+the original tag and `${version}` is the extracted version. Do not assume runtime
+`xpm.source` placeholders such as `${os}`, `${arch_alias}` or `${ext}` expand here.
+Start with GLOBAL alone if no verified mirror exists. Add CN only after checking
+actual paths, complete assets and matching SHA256s. Every target defaults to
+required; an explicitly optional target needs `required = false`. Keep at least one
+required target. Use `latest = "keep"` for a pinned/LTS default.
+
+In xim-pkgindex, install the workflow's pinned updater, run `inspect` and
+`check --package xim:<name> --output plan.json`, review the plan and synchronize
+the repository's coverage inventory. Keep unsupported sources manual, with a reason.
+The index schedules scans every three days; cadence and mirror admission are index
+policy, not global CLI defaults. Candidate PRs still need resource checks and native
+installation, functionality and removal checks before review; the tool does not merge.
+See the [index contributor guide](https://github.com/openxlings/xim-pkgindex/blob/main/docs/10-adding-a-package.md)
+and [update mechanism](https://github.com/openxlings/xim-pkgindex/blob/main/docs/13-ci-mirror-and-update.md).
+
 ## xim-pkgindex adapter (plan format 2)
 
 The xim adapter is selected with `adapter: xim-pkgindex`. It uses the same CLI,
