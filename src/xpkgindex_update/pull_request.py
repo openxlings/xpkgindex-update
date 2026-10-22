@@ -45,7 +45,7 @@ def propose(root, plan, github, *, base=None, draft=False, limit=3) -> list[dict
         if same_package:
             outcomes.append({"id": identity, "status": "pending", "url": same_package[0]["url"]})
             continue
-        history = json.loads(run("gh", "pr", "list", "--state", "all", "--head", branch,
+        history = json.loads(run("gh", "pr", "list", "--state", "all", "--head", branch, "--base", base,
                                  "--json", "headRefName,state,url", cwd=root, env=env))
         if history:
             outcomes.append({"id": identity, "status": "dismissed"})

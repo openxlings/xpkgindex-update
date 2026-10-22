@@ -38,6 +38,9 @@ def test_push_then_failed_pr_is_recovered_without_overwriting(tmp_path, monkeypa
         if args[:3] == ("gh", "repo", "view"):
             return json.dumps({"nameWithOwner": "acme/index", "defaultBranchRef": {"name": "main"}})
         if args[:3] == ("gh", "pr", "list"):
+            # An earlier closed validation PR must not dismiss a production proposal.
+            if "all" in args and "--base" not in args:
+                return json.dumps([{"state": "CLOSED", "url": "https://github.com/acme/index/pull/old-validation"}])
             return "[]"
         if args[:3] == ("gh", "pr", "create"):
             create_attempts.append(args)
