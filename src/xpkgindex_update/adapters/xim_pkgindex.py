@@ -210,7 +210,9 @@ def literal(value, indent=''):
         return json.dumps(value, ensure_ascii=True)
     if not isinstance(value, dict):
         raise Invalid('only literal resource tables can be generated')
-    return '{\n' + ''.join(f'{indent}    [{literal(k)}] = {literal(v, indent + "    ")},\n' for k, v in value.items()) + indent + '}'
+    def key(k):
+        return k if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", k) else "[" + literal(k) + "]"
+    return '{\n' + ''.join(f'{indent}    {key(k)} = {literal(v, indent + "    ")},\n' for k, v in value.items()) + indent + '}' 
 
 
 def append(root: Path, record: dict, github: GitHub):

@@ -107,7 +107,12 @@ def main(argv=None) -> int:
             state = {}
             state_path = getattr(args, "state_file", None)
             if state_path and state_path.exists():
-                state = json.loads(state_path.read_text(encoding="utf-8"))
+                try:
+                    state = json.loads(state_path.read_text(encoding="utf-8"))
+                    if not isinstance(state, dict) or not isinstance(state.get("cursor", ""), str):
+                        state = {}
+                except (OSError, ValueError):
+                    state = {}
             infos.sort(key=lambda info: info["id"])
             if args.command == "check" and not args.package and state.get("cursor"):
                 cursor = state["cursor"]
@@ -123,14 +128,14 @@ def main(argv=None) -> int:
                     if info["autoupdate"] is not None:
                         adapter.validate_config(info)
                 elif info["autoupdate"] is not None:
-                    if processed >= policy["max_packages"]:
+                    if (processed >= policy["max_packages"] or github.requests >= policy["request_budget"]
+                            or github.downloaded >= policy["download_bytes"]):
                         records.append({"id": info["id"], "path": info["path"], "status": "budget-deferred",
                                         "reason": "package budget exhausted"})
                         continue
                     record = adapter.check_package(info, github)
                     processed += 1
-                    if record["status"] != "budget-deferred":
-                        state["cursor"] = info["id"]
+                    state["cursor"] = info["id"]
                     if record["status"] == "waiting-assets":
                         first = waiting.setdefault(info["id"], now)
                         if now - first >= 7 * 86400:
@@ -207,8 +212,11 @@ def main(argv=None) -> int:
             outcomes = []
             for record in plan["packages"]:
                 if record["status"] == "update-ready":
-                    changed = adapter.append(root, record, github)
-                    outcomes.append({"id": record["id"], "status": "appended" if changed else "existing"})
+                    try:
+                        changed = adapter.append(root, record, github)
+                        outcomes.append({"id": record["id"], "status": "appended" if changed else "existing"})
+                    except (Invalid, OSError) as exc:
+                        outcomes.append({"id": record["id"], "status": "error", "reason": str(exc)})
         write_report({"packages": outcomes}, args.output)
         return int(any(record["status"] == "error" for record in outcomes))
     except (Invalid, OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
