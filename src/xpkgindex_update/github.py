@@ -141,21 +141,17 @@ class GitHub:
         self.digests[url] = result
         return result
 
-    def text(self, url: str, *, max_bytes=65536, count_request=False) -> str:
+    def text(self, url: str) -> str:
         """Fetch a bounded public sidecar, never send API credentials."""
         public_url(url)
         request = urllib.request.Request(url, headers={"User-Agent": "xpkgindex-update"})
         for attempt in range(3):
-            if count_request:
-                if self.requests >= self.request_budget:
-                    raise BudgetExceeded("provider request budget exhausted")
-                self.requests += 1
             try:
                 with urllib.request.build_opener(PublicRedirect()).open(request, timeout=45) as response:
-                    payload = response.read(max_bytes + 1)
+                    payload = response.read(65537)
                 self.downloaded += len(payload)
-                if len(payload) > max_bytes:
-                    raise Invalid("public document exceeds size limit")
+                if len(payload) > 65536:
+                    raise Invalid("sidecar exceeds 64 KiB")
                 if self.downloaded > self.download_bytes:
                     raise BudgetExceeded("run download budget exhausted")
                 return payload.decode("utf-8")
@@ -169,12 +165,3 @@ class GitHub:
                     raise
             time.sleep(2 ** attempt)
         raise Invalid("sidecar retry limit exceeded")
-
-    def public_json(self, url: str):
-        key = "public:" + url
-        if key not in self.cache:
-            try:
-                self.cache[key] = json.loads(self.text(url, max_bytes=2 * 1024**2, count_request=True))
-            except WaitingAssets as exc:
-                raise Invalid("release provider endpoint unavailable") from exc
-        return self.cache[key]

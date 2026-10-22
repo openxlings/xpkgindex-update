@@ -173,13 +173,6 @@ and run `propose --plan plan.json` in a separate write-permission job. Ready
 records can be proposed even when another record reports an operational error;
 the final workflow gate must still fail for errors and policy conflicts.
 
-The xim-only `provider = "go"` option requires `upstream = "golang/go"` and
-`tag = "go${version}"`. It discovers stable releases from the official
-`https://go.dev/dl/?mode=json` feed and verifies downloaded resources against
-its authoritative SHA256 values, again during apply. GitHub is used only to
-bind the selected release tag to a commit. It never substitutes GitHub tag
-heuristics for the official Go release feed.
-
 URL templates can use `${version:compact}` for artifact names such as 7zip's
 `7z2602`; tag templates also support `${version:underscore}`. Historical SemVer
 prereleases are ordered below their stable version, while hexadecimal commit
@@ -192,7 +185,6 @@ and is intended to select install tests without skipping new versions or hashes.
 For xim candidate PRs, `xpkgindex-update verify --base <base-sha> --output
 candidate-resources.json` validates only the added versions in the diff. It
 checks all platform/architecture/region URLs against the declaration, downloads
-and compares every resource SHA256 and configured sidecar, and checks the Go
-provider when selected. It does not discover future releases. Use this read-only
+and compares every resource SHA256 and configured sidecar. It does not discover future releases. Use this read-only
 check before native installation jobs; `guard` alone protects history but does
 not download candidate resources.

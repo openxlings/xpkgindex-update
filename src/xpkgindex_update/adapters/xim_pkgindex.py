@@ -99,16 +99,12 @@ def entry_arches(entry):
 def validate_config(info):
     auto = info['autoupdate']
     required = {'upstream', 'tag', 'latest', 'url'}
-    if not isinstance(auto, dict) or not required <= set(auto) or set(auto) - required - {'verify', 'provider'}:
+    if not isinstance(auto, dict) or not required <= set(auto) or set(auto) - required - {'verify'}:
         raise Invalid('xim autoupdate requires upstream, tag, latest, url; optional verify')
     if not isinstance(auto['upstream'], str) or not re.fullmatch(r'[\w.-]+/[\w.-]+', auto['upstream']):
         raise Invalid('upstream must be owner/repository')
     if auto['latest'] not in ('advance', 'keep'):
         raise Invalid('latest policy must be advance or keep')
-    if auto.get('provider') not in (None, 'go'):
-        raise Invalid('unsupported release provider')
-    if auto.get('provider') == 'go' and (auto['upstream'] != 'golang/go' or auto['tag'] != 'go${version}'):
-        raise Invalid('Go provider requires golang/go and go${version} tags')
     if auto.get('verify') not in (None, 'sha256-sidecar'):
         raise Invalid('unsupported verification policy')
     if not isinstance(auto['tag'], str):
@@ -143,17 +139,6 @@ def verify_resource(github, url, sidecar):
     return resource
 
 
-def verify_go_authority(assets, files):
-    verified = {}
-    for asset in assets:
-        for resource in asset['resources'].values():
-            filename = unquote(urlsplit(resource['url']).path.rsplit('/', 1)[-1])
-            if filename not in files or files[filename] != resource['sha256']:
-                raise Invalid('resource differs from official Go release checksums')
-            verified[filename] = files[filename]
-    return verified
-
-
 def check_package(info, github: GitHub):
     record = {'id': info['id'], 'path': info['path'], 'status': 'error'}
     try:
@@ -167,32 +152,24 @@ def check_package(info, github: GitHub):
         floor = max(existing, key=version_key)
         record.update(current=current, repo=auto['upstream'], latest_policy=auto['latest'],
                       latest_before=refs, descriptor_sha256=descriptor_digest(info['text']))
-        authority = {}
-        if auto.get('provider') == 'go':
-            official = github.public_json('https://go.dev/dl/?mode=json')
-            stable = [r for r in official if r.get('stable') and tag_version(auto['tag'], r['version'])]
-            candidates = {r['version']: tag_version(auto['tag'], r['version']) for r in stable}
-            authority = {r['version']: {f['filename']: f['sha256'] for f in r['files']} for r in stable}
-            record['discovery'] = 'go.dev'
-        else:
-            releases = github.listing(auto['upstream'], 'releases')
-            dates = [r.get('published_at', '') for r in releases if tag_version(auto['tag'], r['tag_name']) == current]
-            current_date = max(dates, default='')
-            excluded = {r['tag_name'] for r in releases if r.get('draft') or r.get('prerelease')}
-            candidates = {}
-            for r in releases:
-                if r['tag_name'] in excluded or current_date and r.get('published_at', '') < current_date:
-                    continue
-                v = tag_version(auto['tag'], r['tag_name'])
-                if v:
-                    candidates[r['tag_name']] = v
-            record['discovery'] = 'releases'
-            if not candidates:
-                record['discovery'] = 'tags'
-                for t in github.listing(auto['upstream'], 'tags'):
-                    v = tag_version(auto['tag'], t['name'])
-                    if v and t['name'] not in excluded:
-                        candidates[t['name']] = v
+        releases = github.listing(auto['upstream'], 'releases')
+        dates = [r.get('published_at', '') for r in releases if tag_version(auto['tag'], r['tag_name']) == current]
+        current_date = max(dates, default='')
+        excluded = {r['tag_name'] for r in releases if r.get('draft') or r.get('prerelease')}
+        candidates = {}
+        for r in releases:
+            if r['tag_name'] in excluded or current_date and r.get('published_at', '') < current_date:
+                continue
+            v = tag_version(auto['tag'], r['tag_name'])
+            if v:
+                candidates[r['tag_name']] = v
+        record['discovery'] = 'releases'
+        if not candidates:
+            record['discovery'] = 'tags'
+            for t in github.listing(auto['upstream'], 'tags'):
+                v = tag_version(auto['tag'], t['name'])
+                if v and t['name'] not in excluded:
+                    candidates[t['name']] = v
         if not candidates:
             raise Invalid('policy-required: no matching stable release or numeric tag')
         newest = max(candidates.values(), key=version_key)
@@ -216,8 +193,6 @@ def check_package(info, github: GitHub):
                 if len({r['sha256'] for r in resources.values()}) != 1:
                     raise Invalid('GLOBAL/CN hashes differ')
                 assets.append({'platform': plat, 'arch': arch, 'resources': resources})
-        if auto.get('provider') == 'go':
-            record['authority_sha256'] = verify_go_authority(assets, authority[tag])
         record.update(status='update-ready', assets=assets)
     except WaitingAssets as exc:
         record.update(status='waiting-assets', reason=str(exc))
@@ -260,12 +235,6 @@ def verify_candidates(info, before, github):
                 if any(r['sha256'] != resource['sha256'] for r in checked.values()):
                     raise Invalid('candidate resource SHA256 mismatch')
                 assets.append({'platform': plat, 'arch': arch, 'resources': checked})
-        if auto.get('provider') == 'go':
-            releases = github.public_json('https://go.dev/dl/?mode=json')
-            files = next((r['files'] for r in releases if r.get('stable') and r['version'] == tag), None)
-            if files is None:
-                raise Invalid('candidate is absent from the official Go release feed')
-            verify_go_authority(assets, {f['filename']: f['sha256'] for f in files})
         reports.append({'id': info['id'], 'candidate': version, 'status': 'verified',
                         'tag': tag, 'upstream_commit': github.commit(auto['upstream'], tag), 'assets': assets})
     return reports
@@ -309,14 +278,6 @@ def append(root: Path, record: dict, github: GitHub):
     expected = matrix(info)
     if set(assets) != {(p, a) for p, arches in expected.items() for a in arches} or len(assets) != len(record['assets']):
         raise Invalid('plan platform/architecture matrix mismatch')
-    if auto.get('provider') == 'go':
-        releases = github.public_json('https://go.dev/dl/?mode=json')
-        files = next((r['files'] for r in releases if r.get('stable') and r['version'] == record['tag']), None)
-        if files is None:
-            raise Invalid('Go release left the official provider window; regenerate plan')
-        authority = verify_go_authority(record['assets'], {f['filename']: f['sha256'] for f in files})
-        if authority != record.get('authority_sha256'):
-            raise Invalid('Go authoritative checksums changed since check')
     versions = {}
     for plat, arches in expected.items():
         values = {}
