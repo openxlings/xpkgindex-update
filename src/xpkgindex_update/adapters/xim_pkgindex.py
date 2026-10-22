@@ -323,3 +323,15 @@ def guard(before, after):
             raise Invalid('latest must advance to a newly appended version')
         if new_v not in current.fields:
             raise Invalid('latest target does not exist')
+
+    moved = any(old.fields.get(p) and old.fields[p].fields.get("latest")
+                and new.fields.get(p) and new.fields[p].fields.get("latest")
+                and old.fields[p].fields["latest"].plain() != new.fields[p].fields["latest"].plain()
+                for p in PLATFORMS)
+    if moved:
+        targets = [new.fields[p].fields["latest"].fields["ref"].string()
+                   for p in PLATFORMS if p in old.fields and "latest" in old.fields[p].fields]
+        if len(set(targets)) != 1:
+            raise Invalid("latest advancement must cover every platform")
+    if parse(before).end and before[parse(before).end:] != after[parse(after).end:]:
+        raise Invalid("automatic updates must not change runtime hooks")

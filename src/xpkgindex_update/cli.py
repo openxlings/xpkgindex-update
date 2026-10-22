@@ -7,12 +7,13 @@ import json
 import os
 import subprocess
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 
 from .adapters import get_adapter
 from .github import GitHub
-from .lua_edit import Invalid, parse
+from .lua_edit import Invalid, parse, tokens
 from .pull_request import propose, run
 
 
@@ -63,7 +64,7 @@ def main(argv=None) -> int:
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
     parser.add_argument("--token", default=None)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("inspect", "check", "apply", "propose", "guard"):
+    for name in ("inspect", "check", "apply", "propose", "guard", "runtime-diff"):
         command = commands.add_parser(name)
         command.add_argument("--package")
         command.add_argument("--output")
@@ -74,7 +75,7 @@ def main(argv=None) -> int:
         if name == "propose":
             command.add_argument("--base")
             command.add_argument("--draft", action="store_true")
-        if name == "guard":
+        if name in ("guard", "runtime-diff"):
             command.add_argument("--base", required=True)
     args = parser.parse_args(argv)
     root = args.workspace.resolve()
@@ -86,6 +87,8 @@ def main(argv=None) -> int:
         if args.command in ("inspect", "check"):
             infos, records = [], []
             for path in sorted((root / "pkgs").glob("*/*.lua")):
+                if args.package and path.stem != args.package.split(":")[-1]:
+                    continue
                 try:
                     # Unrelated legacy package expressions do not opt into updating.
                     pkg = parse(path.read_text(encoding="utf-8")).fields
@@ -95,17 +98,21 @@ def main(argv=None) -> int:
                         continue
                     infos.append(adapter.package_info(path, root))
                 except (Invalid, KeyError, OSError) as exc:
-                    records.append({"id": path.stem, "path": path.relative_to(root).as_posix(),
-                                    "status": "error", "reason": str(exc)})
+                    declared = any(t.kind == "word" and t.value == "autoupdate"
+                                   or t.kind == "string" and t.value == "autoupdate"
+                                   for t in tokens(path.read_text(encoding="utf-8")))
+                    if declared or args.command == "inspect":
+                        records.append({"id": path.stem, "path": path.relative_to(root).as_posix(),
+                                        "status": "error" if declared else "unsupported", "reason": str(exc)})
             state = {}
             state_path = getattr(args, "state_file", None)
             if state_path and state_path.exists():
                 state = json.loads(state_path.read_text(encoding="utf-8"))
+            infos.sort(key=lambda info: info["id"])
             if args.command == "check" and not args.package and state.get("cursor"):
                 cursor = state["cursor"]
                 infos = [i for i in infos if i["id"] > cursor] + [i for i in infos if i["id"] <= cursor]
             processed = 0
-            import time
             now = int(time.time())
             waiting = state.get("waiting", {})
             for info in infos:
@@ -145,6 +152,22 @@ def main(argv=None) -> int:
                       "requests": github.requests, "downloaded_bytes": github.downloaded}
             write_report(report, args.output)
             return int(any(r.get("status") in ("error", "policy-required", "existing-version-conflict") for r in records))
+        if args.command == "runtime-diff":
+            from .manifest import runtime_signature
+            changed = run("git", "diff", "--name-only", args.base, "HEAD", "--", "pkgs", cwd=root).splitlines()
+            records = []
+            for filename in changed:
+                if not filename.endswith(".lua"):
+                    continue
+                path = root / filename
+                try:
+                    before = run("git", "show", f"{args.base}:{filename}", cwd=root)
+                    same = runtime_signature(before) == runtime_signature(path.read_text(encoding="utf-8"))
+                except (Invalid, OSError):
+                    same = False
+                records.append({"path": filename, "status": "metadata-only" if same else "runtime-changed"})
+            write_report({"packages": records}, args.output)
+            return 0
         if args.command == "guard":
             files = run("git", "ls-tree", "-r", "--name-only", args.base, "--", "pkgs", cwd=root).splitlines()
             checked = 0

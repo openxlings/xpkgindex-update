@@ -39,7 +39,7 @@ def propose(root, plan, github, *, base=None, draft=False, limit=3) -> list[dict
         slug = re.sub(r"[^a-zA-Z0-9._-]", "-", identity)
         branch = f"auto/bump-{slug}-{record['candidate']}"
         prs = json.loads(run("gh", "pr", "list", "--state", "open", "--limit", "1000",
-                             "--json", "headRefName,state,url,files", cwd=root, env=env))
+                             "--base", base, "--json", "headRefName,state,url,files", cwd=root, env=env))
         same_package = [p for p in prs if p["headRefName"].startswith(f"auto/bump-{slug}-")
                         or any(f["path"] == record["path"] for f in p.get("files", []))]
         if same_package:

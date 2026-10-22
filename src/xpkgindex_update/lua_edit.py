@@ -155,6 +155,9 @@ class Parser:
             t = chunk[0]
             if t.kind == "string":
                 return Node(t.start, t.end, t.value, kind="string")
+            if re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", t.value):
+                value = float(t.value) if "." in t.value else int(t.value)
+                return Node(t.start, t.end, value)
             if t.value in ("true", "false", "nil"):
                 return Node(t.start, t.end, {"true": True, "false": False, "nil": None}[t.value])
         if chunk[0].value == "{" and chunk[0].kind != "string":

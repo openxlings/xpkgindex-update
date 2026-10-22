@@ -36,22 +36,27 @@ def ordered(version: str) -> bool:
 
 
 def expand(template: str, version: str, tag: str) -> str:
-    value = template.replace("${version}", version).replace("${tag}", tag)
+    value = template.replace("${version:compact}", version.replace(".", ""))
+    value = value.replace("${version}", version).replace("${tag}", tag)
     if "${" in value:
         raise Invalid(f"unknown URL placeholder: {template}")
     return value
 
 
 def tag_version(template: str, tag: str) -> str | None:
-    slot = "${version:dash}" if "${version:dash}" in template else "${version}"
+    slots = [s for s in ("${version}", "${version:dash}", "${version:underscore}") if s in template]
+    if len(slots) != 1:
+        raise Invalid("tag must have exactly one version placeholder")
+    slot = slots[0]
     if template.count(slot) != 1 or "${" in template.replace(slot, ""):
-        raise Invalid("tag must have exactly one ${version} or ${version:dash}")
+        raise Invalid("tag must have exactly one version placeholder")
     left, right = template.split(slot)
-    grammar = r"([0-9]+(?:-[0-9]+)*)" if slot.endswith(":dash}") else r"(b?[0-9]+(?:\.[0-9]+)*[a-z]?)"
+    separator = "-" if slot.endswith(":dash}") else "_" if slot.endswith(":underscore}") else None
+    grammar = rf"([0-9]+(?:{separator}[0-9]+)*)" if separator else r"(b?[0-9]+(?:\.[0-9]+)*[a-z]?)"
     match = re.fullmatch(re.escape(left) + grammar + re.escape(right), tag)
     if not match:
         return None
-    return match[1].replace("-", ".") if slot.endswith(":dash}") else match[1]
+    return match[1].replace(separator, ".") if separator else match[1]
 
 
 def package_info(path: Path, root: Path) -> dict:
@@ -296,3 +301,27 @@ def assert_preserved(before: str, after: str) -> None:
         for version, raw in entries.items():
             if new[plat][version] != raw:
                 raise Invalid(f"existing version changed: {plat}/{version}")
+
+
+def runtime_signature(text: str):
+    """Compare runtime inputs; only known CI-only declarations are excluded."""
+    node = parse(text)
+    def value(n, path):
+        if n.kind == "table":
+            fields = {}
+            for key, child in n.fields.items():
+                if not path and key == "ci":
+                    continue
+                if path == ("extensions",) and key == "autoupdate":
+                    continue
+                if path and path[0] == "xpm" and len(path) <= 2 and key in ("url_template", "res_versioned"):
+                    continue
+                item = value(child, (*path, key))
+                if path == () and key == "extensions" and item == ("table", {}):
+                    continue
+                fields[key] = item
+            return "table", fields
+        if n.kind == "expr":
+            return "expr", text[n.start:n.end]
+        return n.kind, n.value
+    return value(node, ()), text[:node.start], text[node.end:]

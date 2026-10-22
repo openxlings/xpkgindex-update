@@ -194,3 +194,29 @@ def test_missing_arch_in_candidate_is_a_conflict(index):
     path.write_text(descriptor().replace('["0.9.0"]', '["1.1.0"]'))
     result = xim.check_package(xim.package_info(path, root), FakeGitHub())
     assert result['status'] == 'existing-version-conflict'
+
+
+def test_numeric_revision_metadata_is_literal():
+    assert parse('package={revision=1,weight=1.5}').plain() == {'revision': 1, 'weight': 1.5}
+
+
+def test_runtime_signature_only_excludes_ci_declarations():
+    from xpkgindex_update.manifest import runtime_signature
+    base = 'package={name="a",xpm={linux={["1"]={url="https://a",sha256="old"}}}}\nfunction install() return true end'
+    metadata = base.replace('name="a",', 'name="a",ci={update=true},extensions={autoupdate={tag="v${version}",url="https://a"}},')
+    assert runtime_signature(base) == runtime_signature(metadata)
+    assert runtime_signature(base) != runtime_signature(base.replace('sha256="old"', 'sha256="new"'))
+    assert runtime_signature(base) != runtime_signature(base.replace('return true', 'return false'))
+
+
+def test_guard_rejects_only_one_platform_advancing(index):
+    root, path = index
+    before = path.read_text()
+    record, client = plan(index)
+    xim.append(root, record, client)
+    after = path.read_text()
+    # Keep the Windows pointer behind while Linux advances.
+    offset = after.index('windows = { ["latest"]')
+    altered = after[:offset] + after[offset:].replace('ref = "1.1.0"', 'ref = "1.0.0"', 1)
+    with pytest.raises(Invalid, match='every platform'):
+        xim.guard(before, altered)
