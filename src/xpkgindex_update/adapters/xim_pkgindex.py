@@ -409,7 +409,7 @@ def append(root: Path, record: dict, github: GitHub):
         raise Invalid('plan latest target mismatch')
     if github.commit(record['repo'], record['tag']) != record['upstream_commit']:
         raise Invalid('upstream tag moved since check')
-    assets = {(a['platform'], a['arch']): a['resources'] for a in record['assets']}
+    assets = {(a['platform'], a['arch']): dict(a['resources']) for a in record['assets']}
     expected = matrix(info)
     if set(assets) != {(p, a) for p, arches in expected.items() for a in arches} or len(assets) != len(record['assets']):
         raise Invalid('plan platform/architecture matrix mismatch')
@@ -428,8 +428,9 @@ def append(root: Path, record: dict, github: GitHub):
                 checked = verify_resource(github, url, auto.get('verify') == 'sha256-sidecar')
                 if region == 'CN' and github_fallback(checked):
                     raise Invalid('CN mirror redirects to GitHub')
-                if checked != resources[region]:
+                if {k: v for k, v in checked.items() if k != 'final_host'} != {k: v for k, v in resources[region].items() if k != 'final_host'}:
                     raise Invalid('artifact changed since check or plan URL was altered')
+                resources[region] = checked
             if global_fallback(resources):
                 raise Invalid('CN mirror redirects to the GLOBAL download host')
             if len({r['sha256'] for r in resources.values()}) != 1:

@@ -164,3 +164,13 @@ def test_non_github_mirror_fallback_to_global_is_not_cn_availability(tmp_path, r
     assert record['status'] == ('waiting-assets' if required else 'update-ready')
     if not required:
         assert all(set(a['resources']) == {'GLOBAL'} for a in record['assets'])
+
+
+def test_cdn_host_rotation_preserves_fixed_artifact_identity(tmp_path):
+    index = setup(tmp_path, {'GLOBAL': 'https://vendor.example/${tag}/foo.zip'})
+    def artifact(host):
+        return lambda url: {'url': url, 'final_host': host, 'size': 12, 'sha256': 'b' * 64}
+    record = check(index, Client(broken=artifact('cdn-one.vendor.example')))
+    assert record['status'] == 'update-ready'
+    xim.append(index[0], record, Client(broken=artifact('cdn-two.vendor.example')))
+    assert 'v1.5.0' in index[1].read_text()
