@@ -153,3 +153,14 @@ def test_manual_newer_architecture_cannot_be_dropped(tmp_path):
     path.write_text(text)
     result = check((root, path), Client())
     assert result['status'] == 'error' and 'architecture set changed' in result['reason']
+
+
+@pytest.mark.parametrize('required', [True, False])
+def test_non_github_mirror_fallback_to_global_is_not_cn_availability(tmp_path, required):
+    index = setup(tmp_path, {'GLOBAL': 'https://vendor.example/${tag}/foo.zip', 'CN': {'url': 'https://mirror.example/${tag}/foo.zip', 'required': required}})
+    def artifact(url):
+        return {'url': url, 'final_host': 'download.vendor.example', 'sha256': 'b' * 64, 'size': 12}
+    record = check(index, Client(broken=artifact))
+    assert record['status'] == ('waiting-assets' if required else 'update-ready')
+    if not required:
+        assert all(set(a['resources']) == {'GLOBAL'} for a in record['assets'])

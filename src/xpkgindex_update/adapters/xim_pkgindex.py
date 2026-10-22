@@ -255,9 +255,22 @@ def check_package(info, github: GitHub):
     return record
 
 
+def resource_host(resource):
+    return resource.get('final_host') or urlsplit(resource.get('final_url', resource['url'])).hostname or ''
+
+
 def github_fallback(resource):
-    host = resource.get('final_host') or urlsplit(resource.get('final_url', resource['url'])).hostname or ''
+    host = resource_host(resource)
     return host == 'github.com' or host.endswith('.githubusercontent.com')
+
+
+def global_fallback(resources):
+    """An external CN endpoint redirecting to GLOBAL's host is not a ready mirror."""
+    if not {'GLOBAL', 'CN'} <= set(resources):
+        return False
+    global_resource, cn_resource = resources['GLOBAL'], resources['CN']
+    return (urlsplit(global_resource['url']).hostname != urlsplit(cn_resource['url']).hostname
+            and resource_host(global_resource) == resource_host(cn_resource))
 
 
 def collect_assets(info, github, version, tag):
@@ -286,6 +299,10 @@ def collect_assets(info, github, version, tag):
     for plat, arches in expected.items():
         for arch in arches:
             resources = {region: checks[plat, arch] for region, checks in checked.items()}
+            if global_fallback(resources):
+                if auto['targets']['CN']['required']:
+                    raise WaitingAssets('CN mirror redirects to the GLOBAL download host')
+                unavailable['CN'] = 'CN mirror redirects to the GLOBAL download host'
             required_hashes = {r['sha256'] for region, r in resources.items() if auto['targets'][region]['required']}
             if len(required_hashes) != 1:
                 raise Invalid('required resource hashes differ')
@@ -351,6 +368,9 @@ def verify_candidates(info, before, github):
                     raise Invalid('CN mirror redirects to GitHub')
                 if checked['sha256'] != resource['sha256']:
                     raise Invalid('candidate resource SHA256 mismatch')
+                asset['resources'][region] = checked
+            if global_fallback(asset['resources']):
+                raise Invalid('CN mirror redirects to the GLOBAL download host')
         reports.append({'id': info['id'], 'candidate': version, 'status': 'verified', 'tag': tag, 'assets': assets})
     return reports
 
@@ -410,6 +430,8 @@ def append(root: Path, record: dict, github: GitHub):
                     raise Invalid('CN mirror redirects to GitHub')
                 if checked != resources[region]:
                     raise Invalid('artifact changed since check or plan URL was altered')
+            if global_fallback(resources):
+                raise Invalid('CN mirror redirects to the GLOBAL download host')
             if len({r['sha256'] for r in resources.values()}) != 1:
                 raise Invalid('mirror content conflict')
             urls = {region: r['url'] for region, r in resources.items()}
