@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from .adapters.mcpp_index import append
+from .adapters import get_adapter
 from .lua_edit import Invalid
 
 
@@ -56,7 +56,7 @@ def propose(root, plan, github, *, base=None, draft=False, limit=3) -> list[dict
             work = (Path(directory) / "work").resolve()
             run("git", "worktree", "add", "--detach", str(work), base_sha, cwd=root)
             try:
-                changed = append(work, record, github)
+                changed = get_adapter(plan.get("adapter", "mcpp-index")).append(work, record, github)
                 if not changed:
                     continue
                 remote = run("git", "ls-remote", "--heads", "origin", branch, cwd=work, env=env)

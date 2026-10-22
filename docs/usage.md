@@ -124,3 +124,51 @@ Source is in `src/xpkgindex_update`, adapter code in `adapters`, tests in `tests
 CI tests Python 3.11/3.13 on Linux, macOS and Windows, plus the composite Action.
 
 MIT.
+
+## xim-pkgindex adapter (plan format 2)
+
+The xim adapter is selected with `adapter: xim-pkgindex`. It uses the same CLI,
+PR recovery and static Lua parser; it does not read legacy update flags or templates.
+Every xim declaration requires an explicit discovery repository and latest policy:
+
+```lua
+extensions = { autoupdate = {
+    upstream = "acme/foo", tag = "v${version}", latest = "advance",
+    url = {
+        linux = {
+            x86_64 = "https://github.com/acme/foo/releases/download/${tag}/foo-amd64.tar.gz",
+            aarch64 = "https://github.com/acme/foo/releases/download/${tag}/foo-arm64.tar.gz",
+        },
+        windows = "https://github.com/acme/foo/releases/download/${tag}/foo.exe",
+    },
+} },
+```
+
+`latest = "keep"` appends without moving pointers. Current platform latest refs
+must agree. Historical platform version sets may differ; new candidates must
+cover every declared platform and architecture. Partial existing candidates are
+conflicts, never repaired implicitly. Architecture additions/removals require an
+explicit packaging change. Multi-architecture output uses literal per-arch
+resource maps; historical entries and runtime hooks are preserved.
+
+A URL leaf can also be a `{ GLOBAL = "https://...", CN = "https://..." }` pair.
+Both mirrors must already exist and match. Optional `verify = "sha256-sidecar"`
+requires each resource's `.sha256` sidecar to name the artifact and match its
+independently computed digest. Resource production is separate from updating.
+
+The fixed plan includes expected pointers, candidate, tag commit, descriptor digest
+and every platform/architecture/region resource. `apply` and `propose` verify this
+plan before writing. Format 1 and format 2 plans cannot be interchanged.
+
+Central positive integer limits are `request_budget`, `resource_bytes`,
+`download_bytes`, `max_packages`, plus the existing `max_prs`. Retry API requests
+count toward the budget. Use `check --state-file <path>` to preserve a scan cursor
+and waiting-resource timestamps; this cursor rotates through the inventory and
+never throttles errors for multiple days. Resources unavailable for seven days
+become errors. Archive recognition includes gzip, ZIP, XZ and bzip2; raw binaries
+are also supported. A failed package does not authorize changes to another package.
+
+Scheduled callers should run `check --output plan.json` once, upload the plan,
+and run `propose --plan plan.json` in a separate write-permission job. Ready
+records can be proposed even when another record reports an operational error;
+the final workflow gate must still fail for errors and policy conflicts.
