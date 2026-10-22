@@ -312,5 +312,8 @@ def test_cli_verify_new_opt_in_package_uses_regular_package_ci(tmp_path):
     path.write_text(descriptor())
     commit('new package opting into future updates')
     output = tmp_path / 'verification.json'
+    assert main(['--workspace', str(tmp_path), 'runtime-diff', '--base', base, '--output', str(output)]) == 0
+    assert json.loads(output.read_text())['packages'] == [
+        {'path': 'pkgs/f/foo.lua', 'status': 'runtime-changed'}]
     assert main(['--workspace', str(tmp_path), 'verify', '--base', base, '--output', str(output)]) == 0
     assert json.loads(output.read_text())['packages'] == []

@@ -167,9 +167,9 @@ def main(argv=None) -> int:
                 path = root / filename
                 try:
                     before = subprocess.check_output(["git", "show", f"{args.base}:{filename}"],
-                                                     cwd=root, text=True, encoding="utf-8")
+                                                     cwd=root, text=True, encoding="utf-8", stderr=subprocess.PIPE)
                     same = runtime_signature(before) == runtime_signature(path.read_text(encoding="utf-8"))
-                except (Invalid, OSError):
+                except (Invalid, OSError, subprocess.CalledProcessError):
                     same = False
                 records.append({"path": filename, "status": "metadata-only" if same else "runtime-changed"})
             write_report({"packages": records}, args.output)
