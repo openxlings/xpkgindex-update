@@ -232,7 +232,8 @@ def check_package(info, github: GitHub):
 
 def verify_candidates(info, before, github):
     """Verify only versions added in this diff; never discover future releases."""
-    guard(before, info['text'])
+    # Git source and Windows checkout may use different line endings.
+    guard(before.replace('\r\n', '\n'), info['text'].replace('\r\n', '\n'))
     validate_config(info)
     old = parse(before).fields['xpm'].fields
     additions = {p: set(data['entries']) - set(old[p].fields) for p, data in info['platforms'].items()}

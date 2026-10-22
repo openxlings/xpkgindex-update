@@ -288,11 +288,14 @@ def test_go_authority_mismatch_is_not_ready(index):
     assert result['status'] == 'error' and 'official Go' in result['reason']
 
 
-def test_candidate_verification_downloads_exact_diff_without_discovery(index):
+@pytest.mark.parametrize("crlf", [False, True])
+def test_candidate_verification_downloads_exact_diff_without_discovery(index, crlf):
     root, path = index
     before = path.read_text()
     record, client = plan(index)
     xim.append(root, record, client)
+    if crlf:
+        path.write_bytes(path.read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'))
     client.listing = lambda *args: pytest.fail('candidate CI must never discover releases')
     results = xim.verify_candidates(xim.package_info(path, root), before, client)
     assert [r['candidate'] for r in results] == ['1.1.0']
