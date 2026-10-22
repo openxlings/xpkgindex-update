@@ -188,3 +188,11 @@ snapshots remain pinned and never follow a release stream.
 `runtime-diff --base <ref>` reports which descriptors change installation inputs.
 It excludes only CI declarations, compares runtime hooks and resource metadata,
 and is intended to select install tests without skipping new versions or hashes.
+
+For xim candidate PRs, `xpkgindex-update verify --base <base-sha> --output
+candidate-resources.json` validates only the added versions in the diff. It
+checks all platform/architecture/region URLs against the declaration, downloads
+and compares every resource SHA256 and configured sidecar, and checks the Go
+provider when selected. It does not discover future releases. Use this read-only
+check before native installation jobs; `guard` alone protects history but does
+not download candidate resources.

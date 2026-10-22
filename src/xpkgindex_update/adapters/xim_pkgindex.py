@@ -230,6 +230,46 @@ def check_package(info, github: GitHub):
     return record
 
 
+def verify_candidates(info, before, github):
+    """Verify only versions added in this diff; never discover future releases."""
+    guard(before, info['text'])
+    validate_config(info)
+    old = parse(before).fields['xpm'].fields
+    additions = {p: set(data['entries']) - set(old[p].fields) for p, data in info['platforms'].items()}
+    versions = set().union(*additions.values())
+    if any(added != versions for added in additions.values()):
+        raise Invalid('candidate additions must cover every platform')
+    auto, expected = info['autoupdate'], matrix(info)
+    reports = []
+    for version in sorted(versions, key=version_key):
+        tag = auto['tag'].replace('${version:dash}', version.replace('.', '-')).replace('${version:underscore}', version.replace('.', '_')).replace('${version}', version)
+        assets = []
+        for plat, arches in expected.items():
+            entry = info['platforms'][plat]['entries'][version].plain()
+            if set(arches) != {'shared'} and set(entry) != set(arches):
+                raise Invalid('candidate resource architecture matrix differs from declaration')
+            for arch, templates in arches.items():
+                resource = entry if arch == 'shared' else entry[arch]
+                if set(resource) != {'url', 'sha256'}:
+                    raise Invalid('candidate must contain explicit URL and SHA256 resources')
+                urls = {r: expand(u, version, tag) for r, u in templates.items()}
+                if regions(resource['url']) != urls:
+                    raise Invalid('candidate URLs differ from the declared matrix')
+                checked = {r: verify_resource(github, u, auto.get('verify') == 'sha256-sidecar') for r, u in urls.items()}
+                if any(r['sha256'] != resource['sha256'] for r in checked.values()):
+                    raise Invalid('candidate resource SHA256 mismatch')
+                assets.append({'platform': plat, 'arch': arch, 'resources': checked})
+        if auto.get('provider') == 'go':
+            releases = github.public_json('https://go.dev/dl/?mode=json')
+            files = next((r['files'] for r in releases if r.get('stable') and r['version'] == tag), None)
+            if files is None:
+                raise Invalid('candidate is absent from the official Go release feed')
+            verify_go_authority(assets, {f['filename']: f['sha256'] for f in files})
+        reports.append({'id': info['id'], 'candidate': version, 'status': 'verified',
+                        'tag': tag, 'upstream_commit': github.commit(auto['upstream'], tag), 'assets': assets})
+    return reports
+
+
 def literal(value, indent=''):
     if isinstance(value, str):
         return json.dumps(value, ensure_ascii=True)

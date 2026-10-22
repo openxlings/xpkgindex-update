@@ -64,7 +64,7 @@ def main(argv=None) -> int:
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
     parser.add_argument("--token", default=None)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("inspect", "check", "apply", "propose", "guard", "runtime-diff"):
+    for name in ("inspect", "check", "apply", "propose", "guard", "runtime-diff", "verify"):
         command = commands.add_parser(name)
         command.add_argument("--package")
         command.add_argument("--output")
@@ -75,7 +75,7 @@ def main(argv=None) -> int:
         if name == "propose":
             command.add_argument("--base")
             command.add_argument("--draft", action="store_true")
-        if name in ("guard", "runtime-diff"):
+        if name in ("guard", "runtime-diff", "verify"):
             command.add_argument("--base", required=True)
     args = parser.parse_args(argv)
     root = args.workspace.resolve()
@@ -173,6 +173,22 @@ def main(argv=None) -> int:
                     same = False
                 records.append({"path": filename, "status": "metadata-only" if same else "runtime-changed"})
             write_report({"packages": records}, args.output)
+            return 0
+        if args.command == "verify":
+            if policy['adapter'] != 'xim-pkgindex':
+                raise Invalid('candidate verification currently requires the xim-pkgindex adapter')
+            records = []
+            files = run('git', 'diff', '--name-only', args.base, 'HEAD', '--', 'pkgs', cwd=root).splitlines()
+            for filename in files:
+                path = root / filename
+                if not filename.endswith('.lua') or not path.exists():
+                    continue
+                info = adapter.package_info(path, root)
+                if not info['autoupdate'] or args.package and info['id'] != args.package:
+                    continue
+                before = subprocess.check_output(['git', 'show', f'{args.base}:{filename}'], cwd=root, text=True, encoding='utf-8')
+                records.extend(adapter.verify_candidates(info, before, github))
+            write_report({'packages': records, 'requests': github.requests, 'downloaded_bytes': github.downloaded}, args.output)
             return 0
         if args.command == "guard":
             files = run("git", "ls-tree", "-r", "--name-only", args.base, "--", "pkgs", cwd=root).splitlines()

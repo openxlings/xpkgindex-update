@@ -286,3 +286,36 @@ def test_go_authority_mismatch_is_not_ready(index):
                                       'files': [{'filename': 'foo.zip', 'sha256': 'c' * 64}]}]
     result = xim.check_package(xim.package_info(path, root), client)
     assert result['status'] == 'error' and 'official Go' in result['reason']
+
+
+def test_candidate_verification_downloads_exact_diff_without_discovery(index):
+    root, path = index
+    before = path.read_text()
+    record, client = plan(index)
+    xim.append(root, record, client)
+    client.listing = lambda *args: pytest.fail('candidate CI must never discover releases')
+    results = xim.verify_candidates(xim.package_info(path, root), before, client)
+    assert [r['candidate'] for r in results] == ['1.1.0']
+    assert len(results[0]['assets']) == 3
+
+
+@pytest.mark.parametrize('change', ['hash', 'missing-platform', 'url'])
+def test_candidate_verification_rejects_incomplete_or_tampered_diff(index, change):
+    root, path = index
+    before = path.read_text()
+    record, client = plan(index)
+    xim.append(root, record, client)
+    text = path.read_text()
+    xpm = parse(text).fields['xpm'].fields
+    node = xpm['windows'].fields['1.1.0']
+    if change == 'hash':
+        target = node.fields['sha256']
+        text = text[:target.start] + '"tampered"' + text[target.end:]
+    elif change == 'url':
+        target = node.fields['url']
+        text = text[:target.start] + '"https://example.org/wrong.zip"' + text[target.end:]
+    else:
+        text = text[:node.start] + '{}' + text[node.end:]
+    path.write_text(text)
+    with pytest.raises(Invalid):
+        xim.verify_candidates(xim.package_info(path, root), before, client)
