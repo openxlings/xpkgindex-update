@@ -243,6 +243,9 @@ snapshots remain pinned and never follow a release stream.
 It excludes only CI declarations, compares runtime hooks and resource metadata,
 and is intended to select install tests without skipping new versions or hashes.
 
+Initial package descriptors use the index's normal package CI; updater verification
+applies to added versions in existing descriptors.
+
 For xim candidate PRs, `xpkgindex-update verify --base <base-sha> --output
 candidate-resources.json` validates only the added versions in the diff. It
 checks all platform/architecture/region URLs against the declaration, downloads

@@ -178,7 +178,9 @@ def main(argv=None) -> int:
             if policy['adapter'] != 'xim-pkgindex':
                 raise Invalid('candidate verification currently requires the xim-pkgindex adapter')
             records = []
-            files = run('git', 'diff', '--name-only', args.base, 'HEAD', '--', 'pkgs', cwd=root).splitlines()
+            # Initial recipes use the index's normal package CI. Upgrade verification
+            # needs an existing descriptor baseline and the updater's append shape.
+            files = run('git', 'diff', '--name-only', '--diff-filter=M', args.base, 'HEAD', '--', 'pkgs', cwd=root).splitlines()
             for filename in files:
                 path = root / filename
                 if not filename.endswith('.lua') or not path.exists():

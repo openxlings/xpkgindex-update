@@ -294,3 +294,23 @@ def test_candidate_verification_rejects_incomplete_or_tampered_diff(index, chang
     path.write_text(text)
     with pytest.raises(Invalid):
         xim.verify_candidates(xim.package_info(path, root), before, client)
+
+
+def test_cli_verify_new_opt_in_package_uses_regular_package_ci(tmp_path):
+    config = tmp_path / '.github/xpkgindex-update.yml'
+    config.parent.mkdir()
+    config.write_text('version: 1\nadapter: xim-pkgindex\n')
+    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
+    def commit(message):
+        subprocess.run(['git', 'add', '.'], cwd=tmp_path, check=True)
+        subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.org',
+                        'commit', '-qm', message], cwd=tmp_path, check=True)
+    commit('base without the package')
+    base = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=tmp_path, text=True).strip()
+    path = tmp_path / 'pkgs/f/foo.lua'
+    path.parent.mkdir(parents=True)
+    path.write_text(descriptor())
+    commit('new package opting into future updates')
+    output = tmp_path / 'verification.json'
+    assert main(['--workspace', str(tmp_path), 'verify', '--base', base, '--output', str(output)]) == 0
+    assert json.loads(output.read_text())['packages'] == []
