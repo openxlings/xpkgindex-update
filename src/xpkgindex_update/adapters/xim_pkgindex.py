@@ -255,6 +255,11 @@ def check_package(info, github: GitHub):
     return record
 
 
+def github_fallback(resource):
+    host = resource.get('final_host') or urlsplit(resource.get('final_url', resource['url'])).hostname or ''
+    return host == 'github.com' or host.endswith('.githubusercontent.com')
+
+
 def collect_assets(info, github, version, tag):
     """A target covers the complete matrix, or is omitted in its entirety."""
     auto, expected = config(info), matrix(info)
@@ -266,8 +271,7 @@ def collect_assets(info, github, version, tag):
                 for arch, templates in arches.items():
                     url = expand(templates[region], version, tag)
                     resource = verify_resource(github, url, auto.get('verify') == 'sha256-sidecar')
-                    final_host = urlsplit(resource.get('final_url', url)).hostname or ''
-                    if region == 'CN' and (final_host == 'github.com' or final_host.endswith('.githubusercontent.com')):
+                    if region == 'CN' and github_fallback(resource):
                         raise WaitingAssets('CN mirror redirects to GitHub; mirror asset is not available')
                     resources[plat, arch] = resource
         except BudgetExceeded:
@@ -343,7 +347,7 @@ def verify_candidates(info, before, github):
         for asset in assets:
             for region, resource in asset['resources'].items():
                 checked = verify_resource(github, resource['url'], auto.get('verify') == 'sha256-sidecar')
-                if region == 'CN' and urlsplit(checked.get('final_url', resource['url'])).hostname in ('github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com'):
+                if region == 'CN' and github_fallback(checked):
                     raise Invalid('CN mirror redirects to GitHub')
                 if checked['sha256'] != resource['sha256']:
                     raise Invalid('candidate resource SHA256 mismatch')
@@ -402,7 +406,7 @@ def append(root: Path, record: dict, github: GitHub):
                 template = templates[region]
                 url = expand(template, candidate, record['tag'])
                 checked = verify_resource(github, url, auto.get('verify') == 'sha256-sidecar')
-                if region == 'CN' and (urlsplit(checked.get('final_url', url)).hostname or '').endswith(('github.com', 'githubusercontent.com')):
+                if region == 'CN' and github_fallback(checked):
                     raise Invalid('CN mirror redirects to GitHub')
                 if checked != resources[region]:
                     raise Invalid('artifact changed since check or plan URL was altered')

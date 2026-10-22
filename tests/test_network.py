@@ -74,3 +74,17 @@ def test_html_is_not_an_artifact(monkeypatch):
     monkeypatch.setattr("urllib.request.build_opener", lambda *a: Opener())
     with pytest.raises(Invalid, match="HTML"):
         GitHub().artifact("https://example.org/a.zip")
+
+
+def test_ephemeral_redirect_queries_do_not_enter_fixed_plans(monkeypatch):
+    class Response(io.BytesIO):
+        def geturl(self):
+            return 'https://release-assets.githubusercontent.com/archive?signature=ephemeral'
+    class Opener:
+        def open(self, request, timeout):
+            return Response(b'PKfixture')
+    monkeypatch.setattr('xpkgindex_update.github.public_url', lambda u: u)
+    monkeypatch.setattr('urllib.request.build_opener', lambda *a: Opener())
+    resource = GitHub().artifact('https://example.org/a.zip')
+    assert resource['final_host'] == 'release-assets.githubusercontent.com'
+    assert 'ephemeral' not in str(resource)

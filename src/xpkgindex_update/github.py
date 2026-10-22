@@ -138,7 +138,7 @@ class GitHub:
             raise Invalid(f"not a bzip2 archive: {url}")
         if url.endswith(".zip") and not head.startswith(b"PK"):
             raise Invalid(f"not a ZIP archive: {url}")
-        result = {"url": url, "final_url": final_url, "size": size, "sha256": digest.hexdigest()}
+        result = {"url": url, "final_host": urllib.parse.urlsplit(final_url).hostname, "size": size, "sha256": digest.hexdigest()}
         self.digests[url] = result
         return result
 
