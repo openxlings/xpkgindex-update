@@ -79,12 +79,12 @@ class GitHub:
 
     def listing(self, repo: str, kind: str) -> list[dict]:
         result = []
-        for page in range(1, 21):
+        for page in range(1, self.request_budget + 1):
             batch = self.api(f"repos/{repo}/{kind}?per_page=100&page={page}")
             result.extend(batch)
             if len(batch) < 100:
                 return result
-        raise Invalid(f"discovery-incomplete: {repo}/{kind} exceeds 2000 entries")
+        raise BudgetExceeded(f"discovery-incomplete: {repo}/{kind} exceeded the request budget")
 
     def commit(self, repo: str, tag: str) -> str:
         return self.api(f"repos/{repo}/commits/{urllib.parse.quote(tag, safe='')}")["sha"]

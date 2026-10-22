@@ -18,13 +18,20 @@ def descriptor_digest(text: str) -> str:
 
 
 def version_key(version: str) -> tuple:
-    match = re.fullmatch(r"(b?)([0-9]+(?:\.[0-9]+)*)([a-z]?)", version)
+    if re.search(r"-[0-9a-f]{7,40}$", version):
+        raise Invalid(f"commit snapshot has no release ordering: {version}")
+    match = re.fullmatch(r"(b?)([0-9]+(?:\.[0-9]+)*)([a-z]?)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?", version)
     if not match:
         raise Invalid(f"not an ordered release version: {version}")
     parts = [int(x) for x in match[2].split(".")]
     while len(parts) > 1 and parts[-1] == 0:
         parts.pop()
-    return match[1], tuple(parts), match[3]
+    if match[4]:
+        prerelease = tuple((0, int(p)) if p.isdigit() else (1, p) for p in match[4].split("."))
+        suffix = (-1, prerelease)
+    else:
+        suffix = (1 if match[3] else 0, match[3])
+    return match[1], tuple(parts), suffix
 
 
 def ordered(version: str) -> bool:

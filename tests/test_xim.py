@@ -235,3 +235,19 @@ def test_runtime_diff_preserves_git_source_trailing_newline(index, capsys):
     capsys.readouterr()
     assert main(['--workspace', str(root), 'runtime-diff', '--base', 'HEAD']) == 0
     assert json.loads(capsys.readouterr().out)['packages'] == []
+
+
+def test_historical_prereleases_do_not_block_a_stable_candidate(index):
+    root, path = index
+    path.write_text(descriptor().replace('["0.9.0"]', '["1.0.0-beta.2"]'))
+    record, client = plan(index)
+    assert record['candidate'] == '1.1.0'
+    xim.append(root, record, client)
+    assert '["1.0.0-beta.2"]' in path.read_text()
+
+
+def test_semver_prerelease_ordering_and_build_equivalence():
+    from xpkgindex_update.manifest import version_key
+    versions = ['1.0.0-beta.2', '1.0.0-beta.11', '1.0.0-rc.1', '1.0.0']
+    assert sorted(versions, key=version_key) == versions
+    assert version_key('1.0.0+build.2') == version_key('1.0.0')
