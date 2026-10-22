@@ -52,6 +52,11 @@ class GitHub:
         self.requests = 0
         self.downloaded = 0
 
+    def charge_request(self):
+        if self.requests >= self.request_budget:
+            raise BudgetExceeded("run request budget exhausted")
+        self.requests += 1
+
     def api(self, path: str):
         if path in self.cache:
             return self.cache[path]
@@ -60,9 +65,7 @@ class GitHub:
             headers["Authorization"] = f"Bearer {self.token}"
         req = urllib.request.Request("https://api.github.com/" + path, headers=headers)
         for attempt in range(3):
-            if self.requests >= self.request_budget:
-                raise BudgetExceeded("GitHub request budget exhausted")
-            self.requests += 1
+            self.charge_request()
             try:
                 with urllib.request.urlopen(req, timeout=45) as response:
                     result = json.load(response)
@@ -107,6 +110,7 @@ class GitHub:
             return self.digests[url]
         if self.downloaded >= self.download_bytes:
             raise BudgetExceeded("run download budget exhausted")
+        self.charge_request()
         public_url(url)
         request = urllib.request.Request(url, headers={"User-Agent": "xpkgindex-update"})
         digest = hashlib.sha256()
@@ -147,6 +151,7 @@ class GitHub:
         public_url(url)
         request = urllib.request.Request(url, headers={"User-Agent": "xpkgindex-update"})
         for attempt in range(3):
+            self.charge_request()
             try:
                 with urllib.request.build_opener(PublicRedirect()).open(request, timeout=45) as response:
                     payload = response.read(65537)
