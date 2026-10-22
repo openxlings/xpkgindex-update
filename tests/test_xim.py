@@ -258,3 +258,31 @@ def test_guard_rejects_dependency_and_platform_source_changes(index):
     before = path.read_text().replace('linux = {\n            ["latest"]', 'linux = {\n            deps = {"xim:old"},\n            ["latest"]')
     with pytest.raises(Invalid, match='dependencies'):
         xim.guard(before, before.replace('xim:old', 'xim:new'))
+
+
+def test_go_uses_official_feed_and_checksums_instead_of_github_releases(index):
+    root, path = index
+    path.write_text(descriptor().replace('upstream = "acme/foo"', 'provider = "go", upstream = "golang/go"').replace('tag = "v${version}"', 'tag = "go${version}"'))
+    client = FakeGitHub()
+    files = [{'filename': name, 'sha256': 'b' * 64}
+             for name in ('foo-x86_64.tar.gz', 'foo-aarch64.tar.gz', 'foo.zip')]
+    client.public_json = lambda url: [{'version': 'go1.1.0', 'stable': True, 'files': files},
+                                      {'version': 'go1.2rc1', 'stable': False, 'files': []}]
+    def forbidden(*args):
+        raise AssertionError('the Go provider must not discover versions from GitHub releases')
+    client.listing = forbidden
+    record, _ = plan(index, client)
+    assert record['discovery'] == 'go.dev'
+    assert record['tag'] == 'go1.1.0'
+    assert len(record['authority_sha256']) == 3
+    xim.append(root, record, client)
+
+
+def test_go_authority_mismatch_is_not_ready(index):
+    root, path = index
+    path.write_text(descriptor().replace('upstream = "acme/foo"', 'provider = "go", upstream = "golang/go"').replace('tag = "v${version}"', 'tag = "go${version}"'))
+    client = FakeGitHub()
+    client.public_json = lambda url: [{'version': 'go1.1.0', 'stable': True,
+                                      'files': [{'filename': 'foo.zip', 'sha256': 'c' * 64}]}]
+    result = xim.check_package(xim.package_info(path, root), client)
+    assert result['status'] == 'error' and 'official Go' in result['reason']

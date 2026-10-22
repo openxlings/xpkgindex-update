@@ -2,7 +2,8 @@
 
 Discover releases. Verify resources. Open update PRs.
 
-A Python CLI and GitHub Action for [mcpp-index](https://github.com/mcpplibs/mcpp-index).
+A Python CLI and GitHub Action for [mcpp-index](https://github.com/mcpplibs/mcpp-index)
+and [xim-pkgindex](https://github.com/openxlings/xim-pkgindex).
 New versions are appended; published versions and mirrors stay intact.
 Identical cross-platform resources are declared once.
 
