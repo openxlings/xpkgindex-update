@@ -61,7 +61,7 @@ def test_true_intersection_with_gaps_and_immutable_history(tmp_path):
     assert record['status'] == 'update-ready', record
     assert record['candidate'] == '1.3.0'  # min(latest GLOBAL, latest CN) would wrongly select 1.4
     xim.append(index[0], record, client)
-    xim.guard(before.decode(), index[1].read_text())
+    xim.guard(before.decode(), index[1].read_bytes().decode())
     client.listing = lambda *a: pytest.fail('verification must not rediscover')
     assert xim.verify_candidates(xim.package_info(index[1], index[0]), before.decode(), client)[0]['status'] == 'verified'
 
