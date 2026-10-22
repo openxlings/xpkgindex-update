@@ -7,7 +7,7 @@ and [xim-pkgindex](https://github.com/openxlings/xim-pkgindex).
 New versions are appended; published versions and mirrors stay intact.
 Identical cross-platform resources are declared once.
 
-## Declare
+## Declare (mcpp-index)
 
 ```lua
 extensions = {
@@ -17,6 +17,20 @@ extensions = {
     },
 },
 ```
+
+For xim-pkgindex:
+
+```lua
+autoupdate = {
+    source = "https://github.com/acme/foo/releases",
+    resources = {
+        GLOBAL = "https://github.com/acme/foo/releases/download/${tag}/foo-${version}.zip",
+    },
+}
+```
+
+Add `CN = { url = "https://verified-mirror/.../${version}/...", required = true }`
+when a verified mirror exists. The newest version must satisfy every required target.
 
 ## Automate
 

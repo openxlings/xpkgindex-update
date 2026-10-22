@@ -48,26 +48,63 @@ def package_info(path: Path, root: Path) -> dict:
 def regions(value):
     if isinstance(value, str):
         return {'GLOBAL': value}
-    if isinstance(value, dict) and set(value) == {'GLOBAL', 'CN'}:
+    if isinstance(value, dict) and value and set(value) <= {'GLOBAL', 'CN'}:
         return value
-    raise Invalid('resource must be an HTTPS URL or a GLOBAL/CN pair')
+    raise Invalid('resource must be an HTTPS URL or a region map')
+
+
+def config(info):
+    """Normalize the public URL-based declaration; no legacy xim translation."""
+    auto = info['autoupdate']
+    if not isinstance(auto, dict) or not {'source', 'resources'} <= set(auto) or set(auto) - {'source', 'resources', 'tag', 'latest', 'verify'}:
+        raise Invalid('xim autoupdate requires source and resources; optional tag, latest, verify')
+    source = auto['source']
+    match = re.fullmatch(r'https://github\.com/([\w.-]+/[\w.-]+)/(releases|tags)/?', source if isinstance(source, str) else '')
+    if not match:
+        raise Invalid('unsupported-source: no version parser for this source URL')
+    targets = auto['resources']
+    if not isinstance(targets, dict) or not targets or set(targets) - {'GLOBAL', 'CN'}:
+        raise Invalid('resources must declare GLOBAL and/or CN')
+    normalized = {}
+    for region, value in targets.items():
+        value = {'url': value} if isinstance(value, str) else value
+        if not isinstance(value, dict) or 'url' not in value or set(value) - {'url', 'required'}:
+            raise Invalid('resource target requires url; optional required')
+        required = value.get('required', True)
+        if not isinstance(required, bool):
+            raise Invalid('required must be boolean')
+        normalized[region] = {**value, 'required': required}
+    if not any(v['required'] for v in normalized.values()):
+        raise Invalid('at least one resource target must be required')
+    return {**auto, 'upstream': match[1], 'discovery': match[2], 'latest': auto.get('latest', 'advance'), 'targets': normalized}
+
+
+def release_version(auto, tag):
+    if 'tag' in auto:
+        return tag_version(auto['tag'], tag)
+    return tag_version('v${version}' if tag.startswith('v') else '${version}', tag)
 
 
 def matrix(info):
-    urls = info['autoupdate']['url']
-    if isinstance(urls, dict) and set(urls) <= set(PLATFORMS):
-        if set(urls) != set(info['platforms']):
-            raise Invalid('URL platforms must equal the versioned platform set')
-    else:
-        urls = dict.fromkeys(info['platforms'], urls)
     result = {}
-    for plat, value in urls.items():
-        if isinstance(value, dict) and set(value) <= ARCHES:
-            if not value:
-                raise Invalid('empty architecture matrix')
-            result[plat] = {a: regions(v) for a, v in value.items()}
+    for region, target in config(info)['targets'].items():
+        urls = target['url']
+        if isinstance(urls, dict) and set(urls) <= set(PLATFORMS):
+            if set(urls) != set(info['platforms']):
+                raise Invalid('URL platforms must equal the versioned platform set')
         else:
-            result[plat] = {'shared': regions(value)}
+            urls = dict.fromkeys(info['platforms'], urls)
+        for plat, value in urls.items():
+            arches = value if isinstance(value, dict) and set(value) <= ARCHES else {'shared': value}
+            if not arches:
+                raise Invalid('empty architecture matrix')
+            for arch, url in arches.items():
+                if not isinstance(url, str):
+                    raise Invalid('resource leaf must be an HTTPS URL template')
+                result.setdefault(plat, {}).setdefault(arch, {})[region] = url
+    for arches in result.values():
+        if any(set(regions) != set(config(info)['targets']) for regions in arches.values()):
+            raise Invalid('resource targets must declare identical platform/architecture matrices')
     return result
 
 
@@ -97,19 +134,15 @@ def entry_arches(entry):
 
 
 def validate_config(info):
-    auto = info['autoupdate']
-    required = {'upstream', 'tag', 'latest', 'url'}
-    if not isinstance(auto, dict) or not required <= set(auto) or set(auto) - required - {'verify'}:
-        raise Invalid('xim autoupdate requires upstream, tag, latest, url; optional verify')
-    if not isinstance(auto['upstream'], str) or not re.fullmatch(r'[\w.-]+/[\w.-]+', auto['upstream']):
-        raise Invalid('upstream must be owner/repository')
+    auto = config(info)
     if auto['latest'] not in ('advance', 'keep'):
         raise Invalid('latest policy must be advance or keep')
     if auto.get('verify') not in (None, 'sha256-sidecar'):
         raise Invalid('unsupported verification policy')
-    if not isinstance(auto['tag'], str):
-        raise Invalid('tag must be a string')
-    tag_version(auto['tag'], '')
+    if 'tag' in auto:
+        if not isinstance(auto['tag'], str):
+            raise Invalid('tag must be a string')
+        tag_version(auto['tag'], '')
     if not info['platforms']:
         raise Invalid('no versioned platforms')
     refs = latest_refs(info)
@@ -118,7 +151,12 @@ def validate_config(info):
         if expected and set(arches) != expected:
             raise Invalid(f'architecture set changed for {plat}: {sorted(expected)} -> {sorted(arches)}')
         if not expected and len(arches) > 1:
-            raise Invalid(f'policy-required: {plat} has no verified multi-architecture baseline')
+            baseline = info['platforms'][plat]['entries'][refs[plat]]
+            declared = info['package'].get('archs')
+            declared = {n.string() for n in declared.fields.values()} if declared else set()
+            declared = {'aarch64' if a == 'arm64' else a for a in declared}
+            if baseline.kind != 'expr' or set(arches) != declared:
+                raise Invalid(f'policy-required: {plat} has no verified multi-architecture baseline')
         for resources in arches.values():
             for url in resources.values():
                 if not isinstance(url, str) or not url.startswith('https://'):
@@ -143,7 +181,7 @@ def check_package(info, github: GitHub):
     record = {'id': info['id'], 'path': info['path'], 'status': 'error'}
     try:
         validate_config(info)
-        auto = info['autoupdate']
+        auto = config(info)
         refs = latest_refs(info)
         current = next(iter(refs.values()))
         existing = set().union(*(p['entries'] for p in info['platforms'].values()))
@@ -152,22 +190,22 @@ def check_package(info, github: GitHub):
         floor = max(existing, key=version_key)
         record.update(current=current, repo=auto['upstream'], latest_policy=auto['latest'],
                       latest_before=refs, descriptor_sha256=descriptor_digest(info['text']))
-        releases = github.listing(auto['upstream'], 'releases')
-        dates = [r.get('published_at', '') for r in releases if tag_version(auto['tag'], r['tag_name']) == current]
+        releases = github.listing(auto['upstream'], 'releases') if auto['discovery'] == 'releases' else []
+        dates = [r.get('published_at', '') for r in releases if release_version(auto, r['tag_name']) == current]
         current_date = max(dates, default='')
         excluded = {r['tag_name'] for r in releases if r.get('draft') or r.get('prerelease')}
         candidates = {}
         for r in releases:
             if r['tag_name'] in excluded or current_date and r.get('published_at', '') < current_date:
                 continue
-            v = tag_version(auto['tag'], r['tag_name'])
+            v = release_version(auto, r['tag_name'])
             if v:
                 candidates[r['tag_name']] = v
         record['discovery'] = 'releases'
         if not candidates:
             record['discovery'] = 'tags'
             for t in github.listing(auto['upstream'], 'tags'):
-                v = tag_version(auto['tag'], t['name'])
+                v = release_version(auto, t['name'])
                 if v and t['name'] not in excluded:
                     candidates[t['name']] = v
         if not candidates:
@@ -180,20 +218,22 @@ def check_package(info, github: GitHub):
         if not ahead:
             record['status'] = 'up-to-date'
             return record
-        tag = max(ahead, key=lambda t: version_key(ahead[t]))
-        candidate = ahead[tag]
-        if sum(version_key(v) == version_key(candidate) for v in ahead.values()) != 1:
-            raise Invalid('ambiguous version spellings or tags')
-        record.update(candidate=candidate, tag=tag, upstream_commit=github.commit(auto['upstream'], tag),
-                      latest_after=candidate if auto['latest'] == 'advance' else current)
-        assets = []
-        for plat, arches in matrix(info).items():
-            for arch, templates in arches.items():
-                resources = {region: verify_resource(github, expand(url, candidate, tag), auto.get('verify') == 'sha256-sidecar') for region, url in templates.items()}
-                if len({r['sha256'] for r in resources.values()}) != 1:
-                    raise Invalid('GLOBAL/CN hashes differ')
-                assets.append({'platform': plat, 'arch': arch, 'resources': resources})
-        record.update(status='update-ready', assets=assets)
+        # The first complete candidate is the newest true intersection.
+        record['attempts'] = []
+        for tag in sorted(ahead, key=lambda t: version_key(ahead[t]), reverse=True):
+            candidate = ahead[tag]
+            if sum(version_key(v) == version_key(candidate) for v in ahead.values()) != 1:
+                raise Invalid('ambiguous version spellings or tags')
+            try:
+                assets, unavailable = collect_assets(info, github, candidate, tag)
+            except WaitingAssets as exc:
+                record['attempts'].append({'version': candidate, 'reason': str(exc)})
+                continue
+            record.update(candidate=candidate, tag=tag, upstream_commit=github.commit(auto['upstream'], tag),
+                          latest_after=candidate if auto['latest'] == 'advance' else current,
+                          status='update-ready', assets=assets, optional_unavailable=unavailable)
+            return record
+        record.update(status='waiting-assets', reason='no newer version has all required resources')
     except WaitingAssets as exc:
         record.update(status='waiting-assets', reason=str(exc))
     except BudgetExceeded as exc:
@@ -205,9 +245,64 @@ def check_package(info, github: GitHub):
     return record
 
 
+def collect_assets(info, github, version, tag):
+    """A target covers the complete matrix, or is omitted in its entirety."""
+    auto, expected = config(info), matrix(info)
+    checked, unavailable = {}, {}
+    for region, target in auto['targets'].items():
+        resources = {}
+        try:
+            for plat, arches in expected.items():
+                for arch, templates in arches.items():
+                    url = expand(templates[region], version, tag)
+                    resource = verify_resource(github, url, auto.get('verify') == 'sha256-sidecar')
+                    final_host = urlsplit(resource.get('final_url', url)).hostname or ''
+                    if region == 'CN' and (final_host == 'github.com' or final_host.endswith('.githubusercontent.com')):
+                        raise WaitingAssets('CN mirror redirects to GitHub; mirror asset is not available')
+                    resources[plat, arch] = resource
+        except BudgetExceeded:
+            raise
+        except (WaitingAssets, Invalid, OSError, ValueError) as exc:
+            if target['required']:
+                raise
+            unavailable[region] = str(exc)
+            continue
+        checked[region] = resources
+    assets = []
+    for plat, arches in expected.items():
+        for arch in arches:
+            resources = {region: checks[plat, arch] for region, checks in checked.items()}
+            required_hashes = {r['sha256'] for region, r in resources.items() if auto['targets'][region]['required']}
+            if len(required_hashes) != 1:
+                raise Invalid('required resource hashes differ')
+            for region in list(resources):
+                if resources[region]['sha256'] not in required_hashes:
+                    unavailable[region] = 'optional mirror content differs from required resource'
+            assets.append({'platform': plat, 'arch': arch, 'resources': resources})
+    # Omit an optional target from all cells if any of its resources disagree.
+    for asset in assets:
+        asset['resources'] = {r: v for r, v in asset['resources'].items() if r not in unavailable}
+    return assets, unavailable
+
+
+def candidate_tag(info, version, assets):
+    auto, expected = config(info), matrix(info)
+    if 'tag' in auto:
+        choices = [auto['tag'].replace('${version:dash}', version.replace('.', '-')).replace('${version:underscore}', version.replace('.', '_')).replace('${version}', version)]
+    else:
+        choices = [version, 'v' + version]
+    matches = [tag for tag in choices if all(
+        resource['url'] == expand(expected[a['platform']][a['arch']][region], version, tag)
+        for a in assets for region, resource in a['resources'].items())]
+    if not matches:
+        raise Invalid('candidate URLs differ from the declared matrix')
+    # When no URL uses ${tag}, either spelling yields the same artifacts. Resolve
+    # against the upstream commit in append; candidate verification checks bytes.
+    return matches[0]
+
+
 def verify_candidates(info, before, github):
     """Verify only versions added in this diff; never discover future releases."""
-    # Git source and Windows checkout may use different line endings.
     guard(before.replace('\r\n', '\n'), info['text'].replace('\r\n', '\n'))
     validate_config(info)
     old = parse(before).fields['xpm'].fields
@@ -215,28 +310,34 @@ def verify_candidates(info, before, github):
     versions = set().union(*additions.values())
     if any(added != versions for added in additions.values()):
         raise Invalid('candidate additions must cover every platform')
-    auto, expected = info['autoupdate'], matrix(info)
+    auto, expected = config(info), matrix(info)
     reports = []
     for version in sorted(versions, key=version_key):
-        tag = auto['tag'].replace('${version:dash}', version.replace('.', '-')).replace('${version:underscore}', version.replace('.', '_')).replace('${version}', version)
         assets = []
         for plat, arches in expected.items():
             entry = info['platforms'][plat]['entries'][version].plain()
             if set(arches) != {'shared'} and set(entry) != set(arches):
                 raise Invalid('candidate resource architecture matrix differs from declaration')
-            for arch, templates in arches.items():
+            for arch in arches:
                 resource = entry if arch == 'shared' else entry[arch]
                 if set(resource) != {'url', 'sha256'}:
                     raise Invalid('candidate must contain explicit URL and SHA256 resources')
-                urls = {r: expand(u, version, tag) for r, u in templates.items()}
-                if regions(resource['url']) != urls:
-                    raise Invalid('candidate URLs differ from the declared matrix')
-                checked = {r: verify_resource(github, u, auto.get('verify') == 'sha256-sidecar') for r, u in urls.items()}
-                if any(r['sha256'] != resource['sha256'] for r in checked.values()):
+                resources = {region: {'url': url, 'sha256': resource['sha256']}
+                             for region, url in regions(resource['url']).items()}
+                if set(resources) - set(auto['targets']) or any(t['required'] and r not in resources for r, t in auto['targets'].items()):
+                    raise Invalid('candidate omits a required resource or adds an undeclared region')
+                assets.append({'platform': plat, 'arch': arch, 'resources': resources})
+        if len({tuple(sorted(a['resources'])) for a in assets}) != 1:
+            raise Invalid('candidate optional targets must cover the full matrix')
+        tag = candidate_tag(info, version, assets)
+        for asset in assets:
+            for region, resource in asset['resources'].items():
+                checked = verify_resource(github, resource['url'], auto.get('verify') == 'sha256-sidecar')
+                if region == 'CN' and urlsplit(checked.get('final_url', resource['url'])).hostname in ('github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com'):
+                    raise Invalid('CN mirror redirects to GitHub')
+                if checked['sha256'] != resource['sha256']:
                     raise Invalid('candidate resource SHA256 mismatch')
-                assets.append({'platform': plat, 'arch': arch, 'resources': checked})
-        reports.append({'id': info['id'], 'candidate': version, 'status': 'verified',
-                        'tag': tag, 'upstream_commit': github.commit(auto['upstream'], tag), 'assets': assets})
+        reports.append({'id': info['id'], 'candidate': version, 'status': 'verified', 'tag': tag, 'assets': assets})
     return reports
 
 
@@ -255,7 +356,7 @@ def append(root: Path, record: dict, github: GitHub):
         raise Invalid('only update-ready records can be applied')
     info = package_info(root / record['path'], root)
     validate_config(info)
-    auto = info['autoupdate']
+    auto = config(info)
     if info['id'] != record['id'] or auto['upstream'] != record['repo']:
         raise Invalid('plan identity/repository mismatch')
     if descriptor_digest(info['text']) != record['descriptor_sha256']:
@@ -264,7 +365,7 @@ def append(root: Path, record: dict, github: GitHub):
     if refs != record['latest_before'] or auto['latest'] != record['latest_policy']:
         raise Invalid('plan latest policy/baseline mismatch')
     candidate = record['candidate']
-    if tag_version(auto['tag'], record['tag']) != candidate:
+    if release_version(auto, record['tag']) != candidate:
         raise Invalid('plan tag/version mismatch')
     for p in info['platforms'].values():
         if any(not ordered(v) or version_key(v) >= version_key(candidate) for v in p['entries']):
@@ -278,16 +379,22 @@ def append(root: Path, record: dict, github: GitHub):
     expected = matrix(info)
     if set(assets) != {(p, a) for p, arches in expected.items() for a in arches} or len(assets) != len(record['assets']):
         raise Invalid('plan platform/architecture matrix mismatch')
+    if len({tuple(sorted(resources)) for resources in assets.values()}) != 1:
+        raise Invalid('plan optional targets must cover the full matrix')
     versions = {}
     for plat, arches in expected.items():
         values = {}
         for arch, templates in arches.items():
             resources = assets[plat, arch]
-            if set(resources) != set(templates):
+            if set(resources) - set(templates) or any(t['required'] and r not in resources for r, t in auto['targets'].items()):
                 raise Invalid('plan URL regions mismatch')
-            for region, template in templates.items():
+            for region in resources:
+                template = templates[region]
                 url = expand(template, candidate, record['tag'])
-                if verify_resource(github, url, auto.get('verify') == 'sha256-sidecar') != resources[region]:
+                checked = verify_resource(github, url, auto.get('verify') == 'sha256-sidecar')
+                if region == 'CN' and (urlsplit(checked.get('final_url', url)).hostname or '').endswith(('github.com', 'githubusercontent.com')):
+                    raise Invalid('CN mirror redirects to GitHub')
+                if checked != resources[region]:
                     raise Invalid('artifact changed since check or plan URL was altered')
             if len({r['sha256'] for r in resources.values()}) != 1:
                 raise Invalid('mirror content conflict')
@@ -377,7 +484,7 @@ def guard(before, after):
             raise Invalid('latest was removed')
         if ref.plain() == target.plain():
             continue
-        if auto is None or auto.fields.get('latest') is None or auto.fields['latest'].string() != 'advance':
+        if auto is None or auto.plain().get('latest', 'advance') != 'advance':
             raise Invalid('latest movement requires the advance policy')
         old_v, new_v = ref.table()['ref'].string(), target.table()['ref'].string()
         if version_key(new_v) <= version_key(old_v) or new_v in previous.fields:

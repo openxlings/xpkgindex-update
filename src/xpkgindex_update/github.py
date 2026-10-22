@@ -114,6 +114,7 @@ class GitHub:
         opener = urllib.request.build_opener(PublicRedirect())
         try:
             with opener.open(request, timeout=180) as response:
+                final_url = response.geturl() if hasattr(response, "geturl") else url
                 head = b""
                 while chunk := response.read(1024 * 1024):
                     if not head:
@@ -137,7 +138,7 @@ class GitHub:
             raise Invalid(f"not a bzip2 archive: {url}")
         if url.endswith(".zip") and not head.startswith(b"PK"):
             raise Invalid(f"not a ZIP archive: {url}")
-        result = {"url": url, "size": size, "sha256": digest.hexdigest()}
+        result = {"url": url, "final_url": final_url, "size": size, "sha256": digest.hexdigest()}
         self.digests[url] = result
         return result
 

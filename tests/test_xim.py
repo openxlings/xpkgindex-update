@@ -15,11 +15,11 @@ def descriptor(policy='advance'):
     return '''package = {
     name = "foo", spec = "2",
     extensions = { autoupdate = {
-        upstream = "acme/foo", tag = "v${version}", latest = "%s",
-        url = { linux = {
+        source = "https://github.com/acme/foo/releases", tag = "v${version}", latest = "%s",
+        resources = { GLOBAL = { url = { linux = {
             x86_64 = "https://example.org/${tag}/foo-x86_64.tar.gz",
             aarch64 = "https://example.org/${tag}/foo-aarch64.tar.gz",
-        }, windows = "https://example.org/${tag}/foo.zip" },
+        }, windows = "https://example.org/${tag}/foo.zip" } } },
     } },
     xpm = {
         linux = {
@@ -120,7 +120,7 @@ def test_latest_conflict_and_changed_arch_policy_visible(index):
 
 def test_sidecar_hash_and_filename_are_verified(index):
     root, path = index
-    path.write_text(descriptor().replace('upstream =', 'verify = "sha256-sidecar", upstream ='))
+    path.write_text(descriptor().replace('source =', 'verify = "sha256-sidecar", source ='))
     client = FakeGitHub()
     client.text = lambda url: 'b' * 64 + '  ' + url.rsplit('/', 1)[-1].removesuffix('.sha256')
     record, _ = plan(index, client)

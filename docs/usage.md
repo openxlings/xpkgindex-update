@@ -129,32 +129,66 @@ MIT.
 
 The xim adapter is selected with `adapter: xim-pkgindex`. It uses the same CLI,
 PR recovery and static Lua parser; it does not read legacy update flags or templates.
-Every xim declaration requires an explicit discovery repository and latest policy:
+The public model is a source URL plus resource URL templates:
 
 ```lua
 extensions = { autoupdate = {
-    upstream = "acme/foo", tag = "v${version}", latest = "advance",
-    url = {
+    source = "https://github.com/acme/foo/releases",
+    resources = {
+        GLOBAL = "https://github.com/acme/foo/releases/download/${tag}/foo-${version}.zip",
+    },
+} },
+```
+
+`latest = "advance"` and each target's `required = true` are defaults. Ordinary
+numeric tags and `v`-prefixed tags need no tag declaration. An explicit `tag`
+template supports project-specific spellings. Source URLs currently recognize
+GitHub `/releases` and `/tags`; other source parsers can be added behind the same
+model. Unknown sources fail explicitly. Resource templates support any public
+HTTPS host independently of discovery.
+
+Expand a target when it needs platform/architecture URLs or optional availability:
+
+```lua
+resources = {
+    GLOBAL = { required = true, url = {
         linux = {
             x86_64 = "https://github.com/acme/foo/releases/download/${tag}/foo-amd64.tar.gz",
             aarch64 = "https://github.com/acme/foo/releases/download/${tag}/foo-arm64.tar.gz",
         },
         windows = "https://github.com/acme/foo/releases/download/${tag}/foo.exe",
-    },
-} },
+    } },
+    CN = { required = false, url = {
+        linux = {
+            x86_64 = "https://verified-mirror.example/foo/${tag}/foo-amd64.tar.gz",
+            aarch64 = "https://verified-mirror.example/foo/${tag}/foo-arm64.tar.gz",
+        },
+        windows = "https://verified-mirror.example/foo/${tag}/foo.exe",
+    } },
+}
 ```
 
-`latest = "keep"` appends without moving pointers. Current platform latest refs
-must agree. Historical platform version sets may differ; new candidates must
-cover every declared platform and architecture. Partial existing candidates are
-conflicts, never repaired implicitly. Architecture additions/removals require an
-explicit packaging change. Multi-architecture output uses literal per-arch
-resource maps; historical entries and runtime hooks are preserved.
+Each target covers the entire declared platform/architecture matrix. At least one
+target must be required. Check candidates in descending order, above every
+existing version. A missing required asset (404/410, or a CN endpoint redirecting
+to GitHub) tries the next candidate: selection is the true intersection, not the
+minimum of each target's newest version. Network failures, corrupt artifacts,
+required hash conflicts and exhausted budgets never authorize fallback to a
+supposedly older supported version. Optional target failures omit the entire
+target, with a diagnostic. Only downloaded, matching resources enter the plan.
 
-A URL leaf can also be a `{ GLOBAL = "https://...", CN = "https://..." }` pair.
-Both mirrors must already exist and match. Optional `verify = "sha256-sidecar"`
-requires each resource's `.sha256` sidecar to name the artifact and match its
-independently computed digest. Resource production is separate from updating.
+`latest = "keep"` appends without moving pointers, useful for LTS/pinned aliases.
+Current platform latest refs must agree. Historical platform version sets may
+differ; new candidates cover every declared platform and architecture. Existing
+partial candidates are conflicts. Literal multi-architecture output leaves every
+historical version, manual entry, comment and runtime hook intact. An opaque
+historical helper is never executed; an explicit matrix matching the package's
+complete declared architectures is required for such a baseline.
+
+Optional `verify = "sha256-sidecar"` requires each artifact's `.sha256` sidecar to
+name the artifact and match its independently computed digest. Resource production
+is separate: consume existing xlings-res mirrors; never replace repackaged assets
+with similarly named upstream archives or publish automatically.
 
 The fixed plan includes expected pointers, candidate, tag commit, descriptor digest
 and every platform/architecture/region resource. `apply` and `propose` verify this
