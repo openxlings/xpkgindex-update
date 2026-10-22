@@ -220,3 +220,18 @@ def test_guard_rejects_only_one_platform_advancing(index):
     altered = after[:offset] + after[offset:].replace('ref = "1.1.0"', 'ref = "1.0.0"', 1)
     with pytest.raises(Invalid, match='every platform'):
         xim.guard(before, altered)
+
+
+def test_runtime_diff_preserves_git_source_trailing_newline(index, capsys):
+    root, path = index
+    subprocess.run(['git', 'init', '-b', 'main', str(root)], check=True, capture_output=True)
+    subprocess.run(['git', '-C', str(root), 'add', '.'], check=True)
+    subprocess.run(['git', '-C', str(root), '-c', 'user.name=test', '-c', 'user.email=test@example.org',
+                    'commit', '-m', 'fixture'], check=True, capture_output=True)
+    config = root / '.github/xpkgindex-update.yml'
+    config.parent.mkdir()
+    config.write_text('version: 1\nadapter: xim-pkgindex\n')
+    assert main(['--workspace', str(root), 'guard', '--base', 'HEAD']) == 0
+    capsys.readouterr()
+    assert main(['--workspace', str(root), 'runtime-diff', '--base', 'HEAD']) == 0
+    assert json.loads(capsys.readouterr().out)['packages'] == []

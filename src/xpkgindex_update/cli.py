@@ -166,7 +166,8 @@ def main(argv=None) -> int:
                     continue
                 path = root / filename
                 try:
-                    before = run("git", "show", f"{args.base}:{filename}", cwd=root)
+                    before = subprocess.check_output(["git", "show", f"{args.base}:{filename}"],
+                                                     cwd=root, text=True, encoding="utf-8")
                     same = runtime_signature(before) == runtime_signature(path.read_text(encoding="utf-8"))
                 except (Invalid, OSError):
                     same = False
@@ -182,7 +183,8 @@ def main(argv=None) -> int:
                 path = root / filename
                 if not path.exists():
                     raise Invalid(f"existing descriptor was removed: {filename}")
-                before = run("git", "show", f"{args.base}:{filename}", cwd=root)
+                before = subprocess.check_output(["git", "show", f"{args.base}:{filename}"],
+                                                     cwd=root, text=True, encoding="utf-8")
                 if before != path.read_text(encoding="utf-8"):
                     adapter.guard(before, path.read_text(encoding="utf-8"))
                 checked += 1
