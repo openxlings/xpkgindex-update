@@ -105,7 +105,9 @@ def test_hash_disagreement_required_fails_optional_omits(tmp_path):
     def artifact(url):
         return {'url': url, 'size': 12, 'sha256': ('c' if 'mirror' in url else 'b') * 64}
     index = setup(tmp_path)
-    assert check(index, Client(broken=artifact))['status'] == 'error'
+    failed = check(index, Client(broken=artifact))
+    assert failed['status'] == 'error' and failed['attempted_candidate'] == '1.5.0'
+    assert 'linux/shared' in failed['reason']
     path = index[1]
     path.write_text(path.read_text().replace('CN="https://mirror.example/${tag}/foo.zip"', 'CN={url="https://mirror.example/${tag}/foo.zip",required=false}'))
     record = check(index, Client(broken=artifact))

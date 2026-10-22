@@ -232,6 +232,7 @@ def check_package(info, github: GitHub):
         record['attempts'] = []
         for tag in sorted(ahead, key=lambda t: version_key(ahead[t]), reverse=True):
             candidate = ahead[tag]
+            record['attempted_candidate'] = candidate
             if sum(version_key(v) == version_key(candidate) for v in ahead.values()) != 1:
                 raise Invalid('ambiguous version spellings or tags')
             try:
@@ -305,7 +306,7 @@ def collect_assets(info, github, version, tag):
                 unavailable['CN'] = 'CN mirror redirects to the GLOBAL download host'
             required_hashes = {r['sha256'] for region, r in resources.items() if auto['targets'][region]['required']}
             if len(required_hashes) != 1:
-                raise Invalid('required resource hashes differ')
+                raise Invalid(f'required resource hashes differ for {plat}/{arch}: ' + ', '.join(f"{region}={r['sha256']} ({r['size']} bytes)" for region, r in resources.items() if auto['targets'][region]['required']))
             for region in list(resources):
                 if resources[region]['sha256'] not in required_hashes:
                     unavailable[region] = 'optional mirror content differs from required resource'
