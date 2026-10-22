@@ -251,3 +251,10 @@ def test_semver_prerelease_ordering_and_build_equivalence():
     versions = ['1.0.0-beta.2', '1.0.0-beta.11', '1.0.0-rc.1', '1.0.0']
     assert sorted(versions, key=version_key) == versions
     assert version_key('1.0.0+build.2') == version_key('1.0.0')
+
+
+def test_guard_rejects_dependency_and_platform_source_changes(index):
+    _, path = index
+    before = path.read_text().replace('linux = {\n            ["latest"]', 'linux = {\n            deps = {"xim:old"},\n            ["latest"]')
+    with pytest.raises(Invalid, match='dependencies'):
+        xim.guard(before, before.replace('xim:old', 'xim:new'))

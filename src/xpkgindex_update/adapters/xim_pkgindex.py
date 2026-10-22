@@ -300,8 +300,32 @@ def append(root: Path, record: dict, github: GitHub):
     return True
 
 
+def protected_metadata(text):
+    root = parse(text)
+    def value(node, path):
+        if node.kind != "table":
+            return (node.kind, text[node.start:node.end]) if node.kind == "expr" else (node.kind, node.value)
+        fields = {}
+        for key, child in node.fields.items():
+            if path == ("extensions",) and key == "autoupdate":
+                continue
+            if path == ("ci",) and key == "update":
+                continue
+            if len(path) == 2 and path[0] == "xpm" and path[1] in PLATFORMS:
+                if ordered(key) or key in ("latest", "url_template", "res_versioned"):
+                    continue
+            item = value(child, (*path, key))
+            if path == () and key in ("extensions", "ci") and item == ("table", {}):
+                continue
+            fields[key] = item
+        return "table", fields
+    return value(root, ())
+
+
 def guard(before, after):
     assert_preserved(before, after)
+    if protected_metadata(before) != protected_metadata(after):
+        raise Invalid("automatic updates must not change dependencies or other runtime metadata")
     old, new = parse(before).fields.get('xpm'), parse(after).fields.get('xpm')
     if not old:
         return
