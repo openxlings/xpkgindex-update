@@ -142,8 +142,10 @@ required; an explicitly optional target needs `required = false`. Keep at least 
 required target. Use `latest = "keep"` for a pinned/LTS default.
 
 In xim-pkgindex, install the workflow's pinned updater, run `inspect` and
-`check --package xim:<name> --output plan.json`, review the plan and synchronize
-the repository's coverage inventory. Keep unsupported sources manual, with a reason.
+`check --package xim:<name> --output plan.json` and review the plan. The recipe is
+the configuration source of truth; index CI generates `coverage.json` as an Actions
+artifact, without a checked-in audit snapshot. Keep unsupported sources manual,
+with a reason in the recipe comments or PR description.
 The index schedules scans every three days; cadence and mirror admission are index
 policy, not global CLI defaults. Candidate PRs still need resource checks and native
 installation, functionality and removal checks before review; the tool does not merge.
