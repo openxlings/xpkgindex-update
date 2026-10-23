@@ -79,8 +79,11 @@ def propose(root, plan, github, *, base=None, draft=False, limit=3) -> list[dict
                         f"HEAD:refs/heads/{branch}", cwd=work, env=env)
                 body = Path(directory) / "body.md"
                 body.write_text(
-                    f"Append `{identity}@{record['candidate']}`. Existing versions are unchanged.\n\n"
-                    f"Upstream: `{record['repo']}@{record['tag']}` (`{record['upstream_commit']}`).\n\n"
+                    f"Append `{identity}@{record['candidate']}`. Existing versions are unchanged.\n\n" +
+                    (f"Source: `{record['source']}`; release `{record['candidate']}` "
+                     f"(metadata SHA256 `{record['source_release_sha256']}`).\n\n"
+                     if record.get('discovery') == 'appcast' else
+                     f"Upstream: `{record['repo']}@{record['tag']}` (`{record['upstream_commit']}`).\n\n") +
                     f"Plan base: `{plan['base_commit']}`; format `{plan.get('format', 1)}`; adapter `{plan.get('adapter', 'mcpp-index')}`.\n\n"
                     f"Latest policy: `{record.get('latest_policy', 'mcpp append-only')}`; "
                     f"before `{record.get('latest_before', record.get('current', 'unchanged'))}`; "

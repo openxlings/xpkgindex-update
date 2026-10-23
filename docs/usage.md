@@ -170,9 +170,32 @@ extensions = { autoupdate = {
 `latest = "advance"` and each target's `required = true` are defaults. Ordinary
 numeric tags and `v`-prefixed tags need no tag declaration. An explicit `tag`
 template supports project-specific spellings. Source URLs currently recognize
-GitHub `/releases` and `/tags`; other source parsers can be added behind the same
-model. Unknown sources fail explicitly. Resource templates support any public
+GitHub `/releases`, `/tags`, and public HTTPS Sparkle RSS appcasts ending in `.xml`.
+Unknown sources fail explicitly. Resource templates support any public
 HTTPS host independently of discovery.
+
+For a vendor's official Sparkle feed, set `source = "https://vendor.example/appcast.xml"`
+and use `${version}` in the same resource templates. No GitHub repository or `tag`
+declaration is needed. The version is Sparkle's numeric `shortVersionString`, not
+its internal build number. Channel-marked releases, prereleases and nested delta
+enclosures are excluded; duplicate versions/builds/architectures fail explicitly.
+Feeds are bounded to 1 MiB and fetched without GitHub credentials.
+
+At least one required resource must match the feed's full enclosure URL and length.
+Other required platforms are verified through their fixed versioned templates;
+the newest version available across the complete matrix wins. A macOS release
+whose Linux resource returns 404 does not advance either platform. Independent
+per-platform version advancement is not implemented. Existing platform-specific
+history and helper-based entries remain unchanged; new entries are literal.
+For example, ChatGPT uses its official appcast plus Linux DEB/macOS ZIP templates.
+This does not require inventing a GitHub mirror or star count for official vendors.
+
+An appcast plan pins the selected version/build/enclosure metadata digest, not the
+entire changing feed. Apply/propose rejects a removed or changed selected item,
+while allowing newly published unrelated versions. Downloaded SHA256 is still
+rechecked. Sparkle's signature is recorded in the metadata digest but **not
+cryptographically verified** by this tool; native package validation must retain
+vendor signature/identity checks (ChatGPT checks macOS codesign and bundle version).
 
 Expand a target when it needs platform/architecture URLs or optional availability:
 
@@ -217,7 +240,7 @@ name the artifact and match its independently computed digest. Resource producti
 is separate: consume existing xlings-res mirrors; never replace repackaged assets
 with similarly named upstream archives or publish automatically.
 
-The fixed plan includes expected pointers, candidate, tag commit, descriptor digest
+The fixed plan includes expected pointers, candidate, tag commit (or appcast release digest), descriptor digest
 and every platform/architecture/region resource. `apply` and `propose` verify this
 plan before writing. Format 1 and format 2 plans cannot be interchanged.
 
