@@ -38,6 +38,11 @@ Use the [xim onboarding checklist](docs/usage.md#new-xim-packages) before opting
 Add `CN = { url = "https://verified-mirror/.../${version}/...", required = true }`
 when a verified mirror exists. The newest version must satisfy every required target.
 
+Official Sparkle appcasts are also supported: use a public HTTPS `.xml` feed as
+`source` and fixed `${version}` download templates, without a GitHub repository.
+The complete required platform matrix must be available before latest advances;
+see [appcast discovery and validation](docs/usage.md#xim-pkgindex-adapter-plan-format-2).
+
 ## Automate
 
 After checking out your index:

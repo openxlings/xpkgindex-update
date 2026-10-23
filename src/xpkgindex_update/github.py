@@ -142,22 +142,24 @@ class GitHub:
             raise Invalid(f"not a bzip2 archive: {url}")
         if url.endswith(".zip") and not head.startswith(b"PK"):
             raise Invalid(f"not a ZIP archive: {url}")
+        if url.endswith(".deb") and not head.startswith(b"!<arch>\n"):
+            raise Invalid(f"not a Debian archive: {url}")
         result = {"url": url, "final_host": urllib.parse.urlsplit(final_url).hostname, "size": size, "sha256": digest.hexdigest()}
         self.digests[url] = result
         return result
 
-    def text(self, url: str) -> str:
-        """Fetch a bounded public sidecar, never send API credentials."""
+    def text(self, url: str, *, max_bytes=65536) -> str:
+        """Fetch bounded public metadata, never send API credentials."""
         public_url(url)
         request = urllib.request.Request(url, headers={"User-Agent": "xpkgindex-update"})
         for attempt in range(3):
             self.charge_request()
             try:
                 with urllib.request.build_opener(PublicRedirect()).open(request, timeout=45) as response:
-                    payload = response.read(65537)
+                    payload = response.read(max_bytes + 1)
                 self.downloaded += len(payload)
-                if len(payload) > 65536:
-                    raise Invalid("sidecar exceeds 64 KiB")
+                if len(payload) > max_bytes:
+                    raise Invalid(f"public metadata exceeds {max_bytes} bytes")
                 if self.downloaded > self.download_bytes:
                     raise BudgetExceeded("run download budget exhausted")
                 return payload.decode("utf-8")

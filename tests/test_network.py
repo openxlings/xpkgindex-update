@@ -116,3 +116,17 @@ def test_sidecar_and_artifact_share_the_run_request_budget(monkeypatch):
     assert client.artifact('https://mirror.example/a.zip')  # cache hits are free
     with pytest.raises(BudgetExceeded):
         client.text('https://mirror.example/a.zip.sha256')
+
+
+@pytest.mark.parametrize('payload,valid', [(b'!<arch>\nfixture', True), (b'error: unavailable', False)])
+def test_debian_archive_magic(monkeypatch, payload, valid):
+    class Opener:
+        def open(self, request, timeout):
+            return io.BytesIO(payload)
+    monkeypatch.setattr('xpkgindex_update.github.public_url', lambda u: u)
+    monkeypatch.setattr('urllib.request.build_opener', lambda *a: Opener())
+    if valid:
+        assert GitHub().artifact('https://vendor.example/app.deb')['size'] == len(payload)
+    else:
+        with pytest.raises(Invalid, match='Debian'):
+            GitHub().artifact('https://vendor.example/app.deb')

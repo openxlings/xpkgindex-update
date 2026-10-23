@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from .. import appcast
 from ..github import BudgetExceeded, GitHub, WaitingAssets
 from ..lua_edit import Invalid, parse
 from ..manifest import (
@@ -68,8 +69,10 @@ def config(info):
         raise Invalid('xim autoupdate requires source and resources; optional tag, latest, verify')
     source = auto['source']
     match = re.fullmatch(r'https://github\.com/([\w.-]+/[\w.-]+)/(releases|tags)/?', source if isinstance(source, str) else '')
-    if not match:
+    if not match and not appcast.is_appcast(source):
         raise Invalid('unsupported-source: no version parser for this source URL')
+    if not match and 'tag' in auto:
+        raise Invalid('tag templates apply only to GitHub sources')
     targets = auto['resources']
     if not isinstance(targets, dict) or not targets or set(targets) - {'GLOBAL', 'CN'}:
         raise Invalid('resources must declare GLOBAL and/or CN')
@@ -84,7 +87,9 @@ def config(info):
         normalized[region] = {**value, 'required': required}
     if not any(v['required'] for v in normalized.values()):
         raise Invalid('at least one resource target must be required')
-    return {**auto, 'upstream': match[1], 'discovery': match[2], 'latest': auto.get('latest', 'advance'), 'targets': normalized}
+    return {**auto, 'upstream': match[1] if match else source,
+            'discovery': match[2] if match else 'appcast',
+            'latest': auto.get('latest', 'advance'), 'targets': normalized}
 
 
 def release_version(auto, tag):
@@ -200,6 +205,8 @@ def check_package(info, github: GitHub):
         floor = max(existing, key=version_key)
         record.update(current=current, repo=auto['upstream'], latest_policy=auto['latest'],
                       latest_before=refs, descriptor_sha256=descriptor_digest(info['text']))
+        if auto['discovery'] == 'appcast':
+            return check_appcast(info, github, record, floor)
         releases = github.listing(auto['upstream'], 'releases') if auto['discovery'] == 'releases' else []
         dates = [r.get('published_at', '') for r in releases if release_version(auto, r['tag_name']) == current]
         current_date = max(dates, default='')
@@ -253,6 +260,32 @@ def check_package(info, github: GitHub):
         reason = str(exc)
         status = next((s for s in ('policy-required', 'existing-version-conflict') if reason.startswith(s)), 'error')
         record.update(status=status, reason=reason)
+    return record
+
+
+def check_appcast(info, github, record, floor):
+    auto = config(info)
+    releases = appcast.releases(github, auto['source'])
+    record.pop('repo')
+    record.update(source=auto['source'], discovery='appcast', attempts=[])
+    ahead = sorted((v for v in releases if version_key(v) > version_key(floor)), key=version_key, reverse=True)
+    if not ahead:
+        record['status'] = 'up-to-date'
+        return record
+    for version in ahead:
+        record['attempted_candidate'] = version
+        try:
+            assets, unavailable = collect_assets(info, github, version, version)
+        except WaitingAssets as exc:
+            record['attempts'].append({'version': version, 'reason': str(exc)})
+            continue
+        appcast.validate_assets(releases[version], assets, auto['targets'])
+        record.update(candidate=version, tag=version,
+                      source_release_sha256=appcast.digest(releases[version]),
+                      latest_after=version if auto['latest'] == 'advance' else record['current'],
+                      status='update-ready', assets=assets, optional_unavailable=unavailable)
+        return record
+    record.update(status='waiting-assets', reason='no newer appcast version has all required resources')
     return record
 
 
@@ -392,7 +425,8 @@ def append(root: Path, record: dict, github: GitHub):
     info = package_info(root / record['path'], root)
     validate_config(info)
     auto = config(info)
-    if info['id'] != record['id'] or auto['upstream'] != record['repo']:
+    source_identity = record.get('source') if auto['discovery'] == 'appcast' else record.get('repo')
+    if info['id'] != record['id'] or auto['upstream'] != source_identity:
         raise Invalid('plan identity/repository mismatch')
     if descriptor_digest(info['text']) != record['descriptor_sha256']:
         raise Invalid('descriptor changed since check; regenerate plan')
@@ -408,7 +442,14 @@ def append(root: Path, record: dict, github: GitHub):
     target = candidate if auto['latest'] == 'advance' else next(iter(refs.values()))
     if record['latest_after'] != target:
         raise Invalid('plan latest target mismatch')
-    if github.commit(record['repo'], record['tag']) != record['upstream_commit']:
+    release = None
+    if auto['discovery'] == 'appcast':
+        # Revalidate only the pinned release; newly published items do not alter
+        # this plan, and a missing/replaced item must require a fresh check.
+        release = appcast.releases(github, auto['source']).get(candidate)
+        if release is None or appcast.digest(release) != record.get('source_release_sha256'):
+            raise Invalid('appcast release changed since check')
+    elif github.commit(record['repo'], record['tag']) != record['upstream_commit']:
         raise Invalid('upstream tag moved since check')
     assets = {(a['platform'], a['arch']): dict(a['resources']) for a in record['assets']}
     expected = matrix(info)
@@ -416,6 +457,8 @@ def append(root: Path, record: dict, github: GitHub):
         raise Invalid('plan platform/architecture matrix mismatch')
     if len({tuple(sorted(resources)) for resources in assets.values()}) != 1:
         raise Invalid('plan optional targets must cover the full matrix')
+    if release is not None:
+        appcast.validate_assets(release, record['assets'], auto['targets'])
     versions = {}
     for plat, arches in expected.items():
         values = {}

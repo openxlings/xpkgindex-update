@@ -2,19 +2,24 @@ import json
 import subprocess
 
 import pytest
+from test_appcast import Client as AppcastClient
+from test_appcast import index as appcast_index
 from test_update import FakeGitHub, descriptor
 
 from xpkgindex_update import pull_request
 from xpkgindex_update.lua_edit import Invalid
-from xpkgindex_update.manifest import check_package, package_info
 
 
-def test_push_then_failed_pr_is_recovered_without_overwriting(tmp_path, monkeypatch):
+@pytest.mark.parametrize('adapter', ['mcpp-index', 'xim-pkgindex'])
+def test_push_then_failed_pr_is_recovered_without_overwriting(tmp_path, monkeypatch, adapter):
     root = tmp_path / "index"
     root.mkdir()
-    path = root / "pkgs/f/foo.lua"
-    path.parent.mkdir(parents=True)
-    path.write_text(descriptor())
+    if adapter == 'xim-pkgindex':
+        path = appcast_index(root)
+    else:
+        path = root / "pkgs/f/foo.lua"
+        path.parent.mkdir(parents=True)
+        path.write_text(descriptor())
 
     def git(*args, cwd=root):
         return subprocess.check_output(["git", *args], cwd=cwd, text=True).strip()
@@ -27,10 +32,11 @@ def test_push_then_failed_pr_is_recovered_without_overwriting(tmp_path, monkeypa
     git("init", "--bare", str(origin))
     git("remote", "add", "origin", str(origin))
     git("push", "origin", "main")
-    client = FakeGitHub()
+    client = AppcastClient() if adapter == 'xim-pkgindex' else FakeGitHub()
     client.token = "fixture-token-never-sent"
-    record = check_package(package_info(path, root), client)
-    plan = {"base_commit": git("rev-parse", "HEAD"), "packages": [record]}
+    policy = pull_request.get_adapter(adapter)
+    record = policy.check_package(policy.package_info(path, root), client)
+    plan = {"base_commit": git("rev-parse", "HEAD"), "adapter": adapter, "packages": [record]}
     real_run = pull_request.run
     create_attempts = []
 
@@ -45,6 +51,10 @@ def test_push_then_failed_pr_is_recovered_without_overwriting(tmp_path, monkeypa
         if args[:3] == ("gh", "pr", "create"):
             create_attempts.append(args)
             assert "--draft" in args
+            if adapter == 'xim-pkgindex':
+                from pathlib import Path
+                body = Path(args[args.index('--body-file') + 1]).read_text()
+                assert 'metadata SHA256' in body and 'vendor.example/appcast.xml' in body
             if len(create_attempts) == 1:
                 raise Invalid("simulated PR API outage after successful push")
             return "https://github.com/acme/index/pull/1"
@@ -54,7 +64,7 @@ def test_push_then_failed_pr_is_recovered_without_overwriting(tmp_path, monkeypa
     before = path.read_bytes()
     with pytest.raises(Invalid, match="simulated PR API outage"):
         pull_request.propose(root, plan, client, draft=True)
-    branch = "auto/bump-compat-foo-1.1.0"
+    branch = f"auto/bump-{record['id'].replace(':', '-')}-{record['candidate']}"
     first = git("ls-remote", "origin", branch)
     assert first
     result = pull_request.propose(root, plan, client, draft=True)
