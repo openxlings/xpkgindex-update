@@ -29,7 +29,12 @@ def branch_for(identity: str) -> str:
 
 
 def owned(pr: dict) -> bool:
-    return pr.get("author", {}).get("login") in BOT_USERS and not pr.get("isCrossRepository", False)
+    author = pr.get("author", {})
+    login = author.get("login", "")
+    # gh's GraphQL author shape differs from REST's `github-actions[bot]`.
+    if author.get("is_bot") is True and login.startswith("app/"):
+        login = login.removeprefix("app/") + "[bot]"
+    return login in BOT_USERS and not pr.get("isCrossRepository", False)
 
 
 def verify_generated(work, sha, base_sha, record, adapter, *, legacy=False):

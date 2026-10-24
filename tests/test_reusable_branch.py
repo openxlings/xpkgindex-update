@@ -175,3 +175,35 @@ def test_failed_migration_keeps_the_legacy_pr_open(repo, monkeypatch):
     assert len(repo['prs']) == 1 and repo['prs'][0]['headRefName'].endswith('-1.1.0')
     assert 'close' not in repo['events']
     assert tip(repo)  # Pushed replacement can be recovered on the next invocation.
+
+
+def test_graphql_bot_author_refreshes_same_candidate_after_main_changes(repo):
+    first = mod.propose(repo['root'], repo['plan'](), repo['client'])
+    old = tip(repo)
+    # This is the real `gh pr list --json author` representation.
+    repo['prs'][0]['author'] = {'is_bot': True, 'login': 'app/github-actions'}
+    (repo['root'] / 'README.md').write_text('reviewed test harness fix\n')
+    repo['git']('add', 'README.md')
+    repo['git']('commit', '-m', 'fix candidate tests')
+    repo['git']('push', 'origin', 'main')
+    base = repo['git']('rev-parse', 'HEAD')
+    refreshed = mod.propose(repo['root'], repo['plan'](), repo['client'])
+    assert refreshed[0]['status'] == 'updated'
+    assert refreshed[0]['url'] == first[0]['url']
+    new = tip(repo)
+    assert new != old and repo['git']('merge-base', old, new) == old
+    assert repo['git']('merge-base', base, new) == base
+    assert repo['git']('diff', '--name-only', base, new) == 'pkgs/f/foo.lua'
+
+
+@pytest.mark.parametrize('author,expected', [
+    ({'login': 'github-actions[bot]'}, True),
+    ({'login': 'app/github-actions', 'is_bot': True}, True),
+    ({'login': 'app/xpkgindex-update', 'is_bot': True}, True),
+    ({'login': 'app/github-actions', 'is_bot': False}, False),
+    ({'login': 'app/unrelated-updater', 'is_bot': True}, False),
+    ({'login': 'maintainer', 'is_bot': False}, False),
+])
+def test_bot_author_normalization_keeps_manual_and_fork_protection(author, expected):
+    assert mod.owned({'author': author, 'isCrossRepository': False}) is expected
+    assert not mod.owned({'author': author, 'isCrossRepository': True})
