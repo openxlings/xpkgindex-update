@@ -43,6 +43,16 @@ def config(root: Path) -> dict:
     return result
 
 
+def save_state(path: Path | None, state: dict, waiting: dict) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    state["waiting"] = waiting
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(state), encoding="utf-8")
+    temporary.replace(path)
+
+
 def write_report(report: dict, output: str | None) -> None:
     serialized = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
     if output:
@@ -52,6 +62,11 @@ def write_report(report: dict, output: str | None) -> None:
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as stream:
+            if "scan" in report:
+                scan = report["scan"]
+                stream.write(f"Scanned {scan['processed']} packages in {scan['batches']} batches "
+                             f"of at most {scan['batch_size']}; "
+                             f"deferred: {report['summary'].get('budget-deferred', 0)}.\n\n")
             stream.write("## xpkgindex-update\n\n| Package | Status | Version | Detail |\n|---|---|---|---|\n")
             for record in report.get("packages", []):
                 values = [record.get("id", ""), record.get("status", ""),
@@ -70,6 +85,8 @@ def main(argv=None) -> int:
         command.add_argument("--output")
         if name == "check":
             command.add_argument("--state-file", type=Path)
+            command.add_argument("--max-batches", type=int, choices=range(1, 21), default=1,
+                                 metavar="1..20", help="scan batches per run; network budgets remain shared")
         if name in ("apply", "propose"):
             command.add_argument("--plan", required=True)
         if name == "propose":
@@ -120,6 +137,12 @@ def main(argv=None) -> int:
             processed = 0
             now = int(time.time())
             waiting = state.get("waiting", {})
+            if not isinstance(waiting, dict):
+                waiting = {}
+            batch_size = policy["max_packages"]
+            max_batches = getattr(args, "max_batches", 1)
+            capacity = batch_size * max_batches
+            exhausted = None
             for info in infos:
                 if args.package and info["id"] != args.package:
                     continue
@@ -128,13 +151,21 @@ def main(argv=None) -> int:
                     if info["autoupdate"] is not None:
                         adapter.validate_config(info)
                 elif info["autoupdate"] is not None:
-                    if (processed >= policy["max_packages"] or github.requests >= policy["request_budget"]
-                            or github.downloaded >= policy["download_bytes"]):
+                    reason = ("scan batch limit exhausted" if processed >= capacity else
+                              "run request budget exhausted" if github.requests >= policy["request_budget"] else
+                              "run download budget exhausted" if github.downloaded >= policy["download_bytes"] else None)
+                    if exhausted or reason:
+                        exhausted = exhausted or reason
                         records.append({"id": info["id"], "path": info["path"], "status": "budget-deferred",
-                                        "reason": "package budget exhausted"})
+                                        "reason": exhausted})
                         continue
                     record = adapter.check_package(info, github)
                     processed += 1
+                    # An interrupted resource check is retried first next run.
+                    if record["status"] == "budget-deferred":
+                        exhausted = record.get("reason", "run resource budget exhausted")
+                        records.append(record)
+                        continue
                     state["cursor"] = info["id"]
                     if record["status"] == "waiting-assets":
                         first = waiting.setdefault(info["id"], now)
@@ -143,18 +174,20 @@ def main(argv=None) -> int:
                     else:
                         waiting.pop(info["id"], None)
                     records.append(record)
+                    if processed % batch_size == 0 and not args.package:
+                        save_state(state_path, state, waiting)
             if args.package and not records:
                 raise Invalid("selected package was not found or has no autoupdate declaration")
             if state_path and not args.package:
-                state_path.parent.mkdir(parents=True, exist_ok=True)
-                state["waiting"] = waiting
-                temporary = state_path.with_suffix(".tmp")
-                temporary.write_text(json.dumps(state), encoding="utf-8")
-                temporary.replace(state_path)
+                save_state(state_path, state, waiting)
             base = run("git", "rev-parse", "HEAD", cwd=root)
             report = {"format": adapter.FORMAT, "base_commit": base, "adapter": policy["adapter"],
                       "packages": records, "summary": dict(Counter(r.get("status", "declared") for r in records)),
                       "requests": github.requests, "downloaded_bytes": github.downloaded}
+            if args.command == "check":
+                report["scan"] = {"batch_size": batch_size, "max_batches": max_batches,
+                                  "batches": (processed + batch_size - 1) // batch_size,
+                                  "processed": processed, "budget_exhausted": exhausted}
             write_report(report, args.output)
             return int(any(r.get("status") in ("error", "policy-required", "existing-version-conflict") for r in records))
         if args.command == "runtime-diff":

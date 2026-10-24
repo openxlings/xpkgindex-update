@@ -275,3 +275,20 @@ checks all platform/architecture/region URLs against the declaration, downloads
 and compares every resource SHA256 and configured sidecar. It does not discover future releases. Use this read-only
 check before native installation jobs; `guard` alone protects history but does
 not download candidate resources.
+
+### Scan batches and proposal limits
+
+`max_packages` is the scan **batch size**, not the number of upgrades or PRs.
+`check --max-batches 20 --state-file state.json --output plan.json` processes up to
+20 sequential batches in one run (default: one). Each eligible package is visited
+at most once. All batches share one request/download budget and one fixed plan.
+The report's `scan` object records batch size, processed count and the limiting
+budget; deferred rows distinguish scan capacity, request and download limits.
+The rotating cursor is checkpointed after each complete batch. A package whose
+resource check exhausts the budget is retried on the next run.
+
+`max_prs` independently limits newly created per-package PRs from that plan.
+For example, `max_packages: 50`, `--max-batches 20` and `max_prs: 20` can scan up to
+1,000 packages but create at most 20 update PRs. Later scans rediscover updates
+outside the proposal limit; existing open PRs prevent duplicates. Updates are
+never merged automatically.
