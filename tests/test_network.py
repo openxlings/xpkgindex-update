@@ -153,3 +153,27 @@ def test_run_download_exhaustion_is_distinct_from_resource_limit(monkeypatch):
     monkeypatch.setattr('urllib.request.build_opener', lambda *a: Opener())
     with pytest.raises(BudgetExceeded, match='run download'):
         GitHub(resource_bytes=100, download_bytes=5).artifact('https://example.org/a.zip')
+
+
+def test_package_request_quota_releases_the_shared_budget_for_other_packages():
+    from xpkgindex_update.github import PackageBudgetExceeded
+    client = GitHub(request_budget=5)
+    with client.package_budget(2, 100):
+        client.charge_request()
+        client.charge_request()
+        with pytest.raises(PackageBudgetExceeded, match='package request'):
+            client.charge_request()
+    with client.package_budget(2, 100):
+        client.charge_request()
+    assert client.requests == 3
+
+
+def test_package_download_quota_releases_the_shared_budget_for_other_packages():
+    from xpkgindex_update.github import PackageBudgetExceeded
+    client = GitHub(download_bytes=100)
+    with client.package_budget(5, 10):
+        with pytest.raises(PackageBudgetExceeded, match='package download'):
+            client.charge_download(11)
+    with client.package_budget(5, 10):
+        client.charge_download(5)
+    assert client.downloaded == 16

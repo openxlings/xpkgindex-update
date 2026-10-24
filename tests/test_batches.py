@@ -121,3 +121,23 @@ def test_twenty_proposals_is_independent_of_scan_batch_size(scan, monkeypatch, t
                      '--output', str(output)]) == 0
     assert len(created) == 20
     assert len(json.loads(output.read_text())['packages']) == 20
+
+
+def test_one_request_heavy_package_cannot_starve_the_inventory(scan, monkeypatch):
+    run, seen, state, config = scan
+    config.write_text(config.read_text() + 'package_requests: 2\n')
+    from xpkgindex_update.github import BudgetExceeded
+    def check(info, client):
+        seen.append(info['id'])
+        try:
+            for _ in range(3 if info['id'] == 'xim:a' else 1):
+                client.charge_request()
+        except BudgetExceeded as exc:
+            return {'id': info['id'], 'status': 'budget-deferred', 'reason': str(exc)}
+        return {'id': info['id'], 'status': 'up-to-date'}
+    monkeypatch.setattr(cli.get_adapter('xim-pkgindex'), 'check_package', check)
+    code, report = run('--max-batches', '3')
+    assert code == 0
+    assert report['summary'] == {'package-deferred': 1, 'up-to-date': 4}
+    assert seen == ['xim:' + n for n in 'abcde']
+    assert json.loads(state.read_text())['cursor'] == 'xim:e'

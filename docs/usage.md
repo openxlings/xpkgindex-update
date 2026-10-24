@@ -60,8 +60,9 @@ max_prs: 3
 
 `mode: propose` creates PRs and requires a token with repository write access.
 Checkout should use `persist-credentials: false`. Plans are uploaded as Actions
-artifacts. An open PR already editing the package also blocks duplicate proposals, including
-manual package PRs. Closed candidate versions are not reopened.
+artifacts. Manual package PRs block automatic proposals. Bot-owned PRs on fixed
+`auto/bump-<namespace>-<package>` branches are refreshed in place when a newer
+candidate is verified. Explicitly closed candidates are not reopened.
 Development end-to-end tests use `propose --draft --base <test-branch>`.
 
 The mcpp adapter remains append-only. The xim adapter uses explicit latest policies
@@ -245,7 +246,8 @@ and every platform/architecture/region resource. `apply` and `propose` verify th
 plan before writing. Format 1 and format 2 plans cannot be interchanged.
 
 Central positive integer limits are `request_budget`, `resource_bytes`,
-`download_bytes`, `max_packages`, plus the existing `max_prs`. Retry API requests
+`download_bytes`, `max_packages`, `package_requests`, `package_download_bytes`,
+plus `max_prs`. Retry API requests
 count toward the budget. Use `check --state-file <path>` to preserve a scan cursor
 and waiting-resource timestamps; this cursor rotates through the inventory and
 never throttles errors for multiple days. Resources unavailable for seven days
@@ -276,19 +278,35 @@ and compares every resource SHA256 and configured sidecar. It does not discover 
 check before native installation jobs; `guard` alone protects history but does
 not download candidate resources.
 
-### Scan batches and proposal limits
+### Scan batches, fairness and reusable PRs
 
 `max_packages` is the scan **batch size**, not the number of upgrades or PRs.
 `check --max-batches 20 --state-file state.json --output plan.json` processes up to
 20 sequential batches in one run (default: one). Each eligible package is visited
 at most once. All batches share one request/download budget and one fixed plan.
-The report's `scan` object records batch size, processed count and the limiting
-budget; deferred rows distinguish scan capacity, request and download limits.
-The rotating cursor is checkpointed after each complete batch. A package whose
-resource check exhausts the budget is retried on the next run.
+The `scan` report identifies batch, request and download exhaustion. Global
+exhaustion keeps the unfinished package for the next run; a package-local quota
+(`package_requests`, default 50; `package_download_bytes`, default 8 GiB) instead
+marks that package `package-deferred`, advances the cursor and lets others run.
+The cursor and candidate queue are checkpointed after each completed batch.
 
-`max_prs` independently limits newly created per-package PRs from that plan.
-For example, `max_packages: 50`, `--max-batches 20` and `max_prs: 20` can scan up to
-1,000 packages but create at most 20 update PRs. Later scans rediscover updates
-outside the proposal limit; existing open PRs prevent duplicates. Updates are
-never merged automatically.
+Verified candidates enter a persistent FIFO in the same state file. A newer
+candidate replaces its record without losing its place. Unvisited candidates
+remain available in the plan's `candidates` list; descriptor changes invalidate
+cached records. `propose --plan plan.json --state-file state.json` rechecks source
+identity and resource bytes before writing and attempts at most `max_prs`
+candidates per invocation (20 in the index integration). Surplus candidates stay
+queued. Failures move to the back with 1-hour to 24-hour exponential backoff.
+An existing PR takes ownership of CI/review; later scans can enqueue its next
+candidate. All state-file writes are atomic; callers must persist the post-proposal
+state, not just the scan checkpoint. Corrupt state is rejected rather than reset.
+
+Branches are fixed per package, for example `auto/bump-xim-nvim`. Verified newer
+candidates refresh the same PR, replacing only unpublished candidate changes.
+Commits include the previous update head and current production base as parents;
+pushes are ordinary fast-forward pushes, never forced. Provenance and exact tree
+checks reject manual edits, unrelated files and concurrent changes. The PR title
+and resource evidence are updated too; CI must validate the new head. Bot-owned
+legacy version branches migrate only after their replacement PR is created.
+Manual PRs are never overwritten. A moved production base requires a fresh plan.
+Updates are never merged automatically.

@@ -11,11 +11,16 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 
 from .lua_edit import Invalid
 
 
 class BudgetExceeded(Invalid):
+    pass
+
+
+class PackageBudgetExceeded(BudgetExceeded):
     pass
 
 
@@ -51,10 +56,29 @@ class GitHub:
         self.digests = {}
         self.requests = 0
         self.downloaded = 0
+        self._package_limits = None
+
+    @contextmanager
+    def package_budget(self, requests: int, download_bytes: int):
+        previous = self._package_limits
+        self._package_limits = (self.requests + requests, self.downloaded + download_bytes)
+        try:
+            yield
+        finally:
+            self._package_limits = previous
+
+    def charge_download(self, amount: int):
+        self.downloaded += amount
+        if self.downloaded > self.download_bytes:
+            raise BudgetExceeded("run download budget exhausted")
+        if self._package_limits and self.downloaded > self._package_limits[1]:
+            raise PackageBudgetExceeded("package download budget exhausted")
 
     def charge_request(self):
         if self.requests >= self.request_budget:
             raise BudgetExceeded("run request budget exhausted")
+        if self._package_limits and self.requests >= self._package_limits[0]:
+            raise PackageBudgetExceeded("package request budget exhausted")
         self.requests += 1
 
     def api(self, path: str):
@@ -124,9 +148,7 @@ class GitHub:
                     if not head:
                         head = chunk[:512]
                     size += len(chunk)
-                    self.downloaded += len(chunk)
-                    if self.downloaded > self.download_bytes:
-                        raise BudgetExceeded("run download budget exhausted")
+                    self.charge_download(len(chunk))
                     if size > self.resource_bytes:
                         raise Invalid("policy-required: resource exceeds per-resource byte limit")
                     digest.update(chunk)
@@ -159,11 +181,9 @@ class GitHub:
             try:
                 with urllib.request.build_opener(PublicRedirect()).open(request, timeout=45) as response:
                     payload = response.read(max_bytes + 1)
-                self.downloaded += len(payload)
+                self.charge_download(len(payload))
                 if len(payload) > max_bytes:
                     raise Invalid(f"public metadata exceeds {max_bytes} bytes")
-                if self.downloaded > self.download_bytes:
-                    raise BudgetExceeded("run download budget exhausted")
                 return payload.decode("utf-8")
             except urllib.error.HTTPError as exc:
                 if exc.code in (404, 410):
