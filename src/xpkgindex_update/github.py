@@ -125,8 +125,10 @@ class GitHub:
                         head = chunk[:512]
                     size += len(chunk)
                     self.downloaded += len(chunk)
-                    if size > self.resource_bytes or self.downloaded > self.download_bytes:
-                        raise BudgetExceeded("resource or run download budget exhausted")
+                    if self.downloaded > self.download_bytes:
+                        raise BudgetExceeded("run download budget exhausted")
+                    if size > self.resource_bytes:
+                        raise Invalid("policy-required: resource exceeds per-resource byte limit")
                     digest.update(chunk)
         except urllib.error.HTTPError as exc:
             if exc.code in (404, 410):
