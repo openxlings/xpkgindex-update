@@ -130,3 +130,50 @@ def test_debian_archive_magic(monkeypatch, payload, valid):
     else:
         with pytest.raises(Invalid, match='Debian'):
             GitHub().artifact('https://vendor.example/app.deb')
+
+
+def test_oversized_resource_does_not_exhaust_the_run_budget(monkeypatch):
+    class Opener:
+        def open(self, request, timeout):
+            return io.BytesIO(b'PKoversized' if request.full_url.endswith('large.zip') else b'PKok')
+    monkeypatch.setattr('xpkgindex_update.github.public_url', lambda u: u)
+    monkeypatch.setattr('urllib.request.build_opener', lambda *a: Opener())
+    client = GitHub(resource_bytes=5, download_bytes=100)
+    with pytest.raises(Invalid, match='per-resource') as error:
+        client.artifact('https://example.org/large.zip')
+    assert not isinstance(error.value, BudgetExceeded)
+    assert client.artifact('https://example.org/small.zip')['size'] == 4
+
+
+def test_run_download_exhaustion_is_distinct_from_resource_limit(monkeypatch):
+    class Opener:
+        def open(self, request, timeout):
+            return io.BytesIO(b'PKfixture')
+    monkeypatch.setattr('xpkgindex_update.github.public_url', lambda u: u)
+    monkeypatch.setattr('urllib.request.build_opener', lambda *a: Opener())
+    with pytest.raises(BudgetExceeded, match='run download'):
+        GitHub(resource_bytes=100, download_bytes=5).artifact('https://example.org/a.zip')
+
+
+def test_package_request_quota_releases_the_shared_budget_for_other_packages():
+    from xpkgindex_update.github import PackageBudgetExceeded
+    client = GitHub(request_budget=5)
+    with client.package_budget(2, 100):
+        client.charge_request()
+        client.charge_request()
+        with pytest.raises(PackageBudgetExceeded, match='package request'):
+            client.charge_request()
+    with client.package_budget(2, 100):
+        client.charge_request()
+    assert client.requests == 3
+
+
+def test_package_download_quota_releases_the_shared_budget_for_other_packages():
+    from xpkgindex_update.github import PackageBudgetExceeded
+    client = GitHub(download_bytes=100)
+    with client.package_budget(5, 10):
+        with pytest.raises(PackageBudgetExceeded, match='package download'):
+            client.charge_download(11)
+    with client.package_budget(5, 10):
+        client.charge_download(5)
+    assert client.downloaded == 16

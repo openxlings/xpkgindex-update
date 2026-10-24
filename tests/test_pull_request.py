@@ -64,7 +64,7 @@ def test_push_then_failed_pr_is_recovered_without_overwriting(tmp_path, monkeypa
     before = path.read_bytes()
     with pytest.raises(Invalid, match="simulated PR API outage"):
         pull_request.propose(root, plan, client, draft=True)
-    branch = f"auto/bump-{record['id'].replace(':', '-')}-{record['candidate']}"
+    branch = pull_request.branch_for(record["id"])
     first = git("ls-remote", "origin", branch)
     assert first
     result = pull_request.propose(root, plan, client, draft=True)
@@ -91,7 +91,7 @@ def test_existing_bot_or_manual_package_pr_prevents_duplicate(tmp_path, monkeypa
         if args[:2] == ("git", "rev-parse"):
             return "base"
         if args[:3] == ("gh", "pr", "list"):
-            assert "headRefName,state,url,files" in args
+            assert "headRefName,state,url,files,author,isCrossRepository" in args
             return json.dumps([{"headRefName": branch, "state": "OPEN", "url": url, "files": files}])
         pytest.fail(f"an existing package PR must prevent mutation: {args}")
 

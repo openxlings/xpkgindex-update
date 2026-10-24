@@ -6,7 +6,7 @@ import hashlib
 import re
 from pathlib import Path
 
-from .github import GitHub, WaitingAssets
+from .github import BudgetExceeded, GitHub, WaitingAssets
 from .lua_edit import Invalid, Node, parse
 
 PLATFORMS = ("linux", "macosx", "windows")
@@ -264,6 +264,8 @@ def check_package(info: dict, github: GitHub) -> dict:
         record.update(status="update-ready", assets=assets)
     except WaitingAssets as exc:
         record.update(status="waiting-assets", reason=str(exc))
+    except BudgetExceeded as exc:
+        record.update(status="budget-deferred", reason=str(exc))
     except (Invalid, OSError, ValueError, KeyError) as exc:
         record.update(status="error", reason=str(exc))
     return record

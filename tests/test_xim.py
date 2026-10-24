@@ -163,6 +163,9 @@ def test_cli_fixed_plan_and_state_cursor(index, monkeypatch):
     config.parent.mkdir()
     config.write_text('version: 1\nadapter: xim-pkgindex\nmax_prs: 3\n')
     class Client(FakeGitHub):
+        from contextlib import nullcontext
+        def package_budget(self, *args):
+            return self.nullcontext()
         def __init__(self, *args, **kwargs):
             super().__init__()
             self.requests, self.downloaded = 0, 0
