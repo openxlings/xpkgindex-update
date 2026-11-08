@@ -320,3 +320,107 @@ def test_cli_verify_new_opt_in_package_uses_regular_package_ci(tmp_path):
         {'path': 'pkgs/f/foo.lua', 'status': 'runtime-changed'}]
     assert main(['--workspace', str(tmp_path), 'verify', '--base', base, '--output', str(output)]) == 0
     assert json.loads(output.read_text())['packages'] == []
+
+def divergent_descriptor(divergence='platform'):
+    return '''package = {
+    name = "foo", spec = "2",
+    extensions = { autoupdate = {
+        source = "https://example.org/appcast.xml", divergence = "%s",
+        resources = { GLOBAL = { url = {
+            linux = { x86_64 = "https://example.org/${version}/foo-amd64.deb" },
+            macosx = { aarch64 = "https://example.org/${version}/foo-arm64.zip" },
+        } } },
+    } },
+    xpm = {
+        linux = {
+            ["latest"] = { ref = "1.0.0" },
+            ["1.0.0"] = { url = "https://example.org/1.0.0/foo-amd64.deb", sha256 = "old-deb" },
+        },
+        macosx = {
+            ["latest"] = { ref = "1.1.0" },
+            ["1.0.0"] = { url = "https://example.org/1.0.0/foo-arm64.zip", sha256 = "old-zip" },
+            ["1.1.0"] = { url = "https://example.org/1.1.0/foo-arm64.zip", sha256 = "mid-zip" },
+        },
+    },
+}
+function install() error("never execute me") end
+''' % divergence
+
+
+@pytest.fixture
+def divergent_index(tmp_path):
+    path = tmp_path / 'pkgs/f/foo.lua'
+    path.parent.mkdir(parents=True)
+    path.write_text(divergent_descriptor())
+    return tmp_path, path
+
+
+def appcast_client(client, versions):
+    items = ''.join(
+        f'<item><s:shortVersionString>{v}</s:shortVersionString><s:version>1</s:version>'
+        f'<enclosure url="https://example.org/{v}/foo-arm64.zip" length="12" /></item>'
+        for v in versions)
+    client.text = lambda url, **kwargs: (
+        f'<rss xmlns:s="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel>{items}</channel></rss>')
+    return client
+
+
+def test_divergent_latest_refs_are_accepted_and_validated(divergent_index):
+    root, path = divergent_index
+    info = xim.package_info(path, root)
+    xim.validate_config(info)
+    assert xim.latest_refs(info) == {'linux': '1.0.0', 'macosx': '1.1.0'}
+    shared = xim.package_info(path, root)
+    shared['autoupdate'].pop('divergence')
+    with pytest.raises(Invalid, match='latest refs disagree'):
+        xim.validate_config(shared)
+
+
+def test_divergence_value_is_validated(divergent_index):
+    root, path = divergent_index
+    path.write_text(divergent_descriptor('bogus'))
+    with pytest.raises(Invalid, match='divergence must be'):
+        xim.validate_config(xim.package_info(path, root))
+
+
+def test_divergent_pr_adds_a_platform_only_version(divergent_index):
+    root, path = divergent_index
+    before = path.read_text()
+    after = before.replace(
+        '["1.1.0"] = { url = "https://example.org/1.1.0/foo-arm64.zip", sha256 = "mid-zip" },',
+        '["1.1.0"] = { url = "https://example.org/1.1.0/foo-arm64.zip", sha256 = "mid-zip" },\n'
+        '            ["1.2.0"] = { aarch64 = { url = "https://example.org/1.2.0/foo-arm64.zip", sha256 = "new-zip" } },'
+    ).replace('["latest"] = { ref = "1.1.0" }', '["latest"] = { ref = "1.2.0" }')
+    path.write_text(after)
+    xim.guard(before, after)
+    client = FakeGitHub()
+    client.artifact = lambda url: {'url': url, 'size': 12, 'sha256': 'new-zip'}
+    results = xim.verify_candidates(xim.package_info(path, root), before, client)
+    assert [r['candidate'] for r in results] == ['1.2.0']
+    assert [(a['platform'], a['arch']) for a in results[0]['assets']] == [('macosx', 'aarch64')]
+    # Without the opt-in the same diff stays a conflict.
+    shared_after = divergent_descriptor('shared').replace(
+        '["1.1.0"] = { url = "https://example.org/1.1.0/foo-arm64.zip", sha256 = "mid-zip" },',
+        '["1.1.0"] = { url = "https://example.org/1.1.0/foo-arm64.zip", sha256 = "mid-zip" },\n'
+        '            ["1.2.0"] = { aarch64 = { url = "https://example.org/1.2.0/foo-arm64.zip", sha256 = "new-zip" } },'
+    ).replace('["latest"] = { ref = "1.1.0" }', '["latest"] = { ref = "1.2.0" }')
+    path.write_text(shared_after)
+    with pytest.raises(Invalid, match='must cover every platform'):
+        xim.verify_candidates(xim.package_info(path, root), before, client)
+
+
+def test_divergent_appcast_waits_until_a_version_beats_every_platform(divergent_index):
+    root, path = divergent_index
+    info = xim.package_info(path, root)
+    # 1.2.0 exists upstream but cannot complete the linux matrix cell.
+    client = appcast_client(FakeGitHub(), ['1.2.0'])
+    client.fail_url = 'foo-amd64.deb'
+    assert xim.check_package(info, client)['status'] == 'waiting-assets'
+    # A version newer than every platform's floor completes both cells and
+    # converges the divergent pointers in one atomic append.
+    client = appcast_client(FakeGitHub(), ['1.3.0'])
+    client.artifact = lambda url: {'url': url, 'size': 12, 'sha256': 'b' * 64}
+    record = xim.check_package(info, client)
+    assert record['status'] == 'update-ready' and record['candidate'] == '1.3.0'
+    xim.append(root, record, client)
+    assert xim.latest_refs(xim.package_info(path, root)) == {'linux': '1.3.0', 'macosx': '1.3.0'}

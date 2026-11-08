@@ -65,8 +65,10 @@ def regions(value):
 def config(info):
     """Normalize the public URL-based declaration; no legacy xim translation."""
     auto = info['autoupdate']
-    if not isinstance(auto, dict) or not {'source', 'resources'} <= set(auto) or set(auto) - {'source', 'resources', 'tag', 'latest', 'verify'}:
-        raise Invalid('xim autoupdate requires source and resources; optional tag, latest, verify')
+    if not isinstance(auto, dict) or not {'source', 'resources'} <= set(auto) or set(auto) - {'source', 'resources', 'tag', 'latest', 'verify', 'divergence'}:
+        raise Invalid('xim autoupdate requires source and resources; optional tag, latest, verify, divergence')
+    if auto.get('divergence', 'shared') not in ('shared', 'platform'):
+        raise Invalid('divergence must be shared or platform')
     source = auto['source']
     match = re.fullmatch(r'https://github\.com/([\w.-]+/[\w.-]+)/(releases|tags)/?', source if isinstance(source, str) else '')
     if not match and not appcast.is_appcast(source):
@@ -121,6 +123,11 @@ def matrix(info):
     return result
 
 
+def platform_divergent(info):
+    auto = info['autoupdate']
+    return isinstance(auto, dict) and auto.get('divergence') == 'platform'
+
+
 def latest_refs(info):
     refs = {}
     for plat, p in info['platforms'].items():
@@ -131,7 +138,7 @@ def latest_refs(info):
         if ref not in p['entries'] or not ordered(ref):
             raise Invalid('latest must name an existing ordered version')
         refs[plat] = ref
-    if len(set(refs.values())) != 1:
+    if len(set(refs.values())) != 1 and not platform_divergent(info):
         raise Invalid('policy-required: current platform latest refs disagree')
     return refs
 
@@ -198,7 +205,7 @@ def check_package(info, github: GitHub):
         validate_config(info)
         auto = config(info)
         refs = latest_refs(info)
-        current = next(iter(refs.values()))
+        current = max(refs.values(), key=version_key)
         existing = set().union(*(p['entries'] for p in info['platforms'].values()))
         if any(not ordered(v) for v in existing):
             raise Invalid('policy-required: historical version has no release ordering')
@@ -372,14 +379,16 @@ def verify_candidates(info, before, github):
     validate_config(info)
     old = parse(before).fields['xpm'].fields
     additions = {p: set(data['entries']) - set(old[p].fields) for p, data in info['platforms'].items()}
-    versions = set().union(*additions.values())
-    if any(added != versions for added in additions.values()):
+    versions = set().union(*additions.values()) if additions else set()
+    if not platform_divergent(info) and any(added != versions for added in additions.values()):
         raise Invalid('candidate additions must cover every platform')
     auto, expected = config(info), matrix(info)
     reports = []
     for version in sorted(versions, key=version_key):
         assets = []
         for plat, arches in expected.items():
+            if version not in additions[plat]:
+                continue
             entry = info['platforms'][plat]['entries'][version].plain()
             if set(arches) != {'shared'} and set(entry) != set(arches):
                 raise Invalid('candidate resource architecture matrix differs from declaration')
@@ -577,7 +586,8 @@ def guard(before, after):
                 and new.fields.get(p) and new.fields[p].fields.get("latest")
                 and old.fields[p].fields["latest"].plain() != new.fields[p].fields["latest"].plain()
                 for p in PLATFORMS)
-    if moved:
+    divergent = auto is not None and auto.plain().get('divergence') == 'platform'
+    if moved and not divergent:
         targets = [new.fields[p].fields["latest"].fields["ref"].string()
                    for p in PLATFORMS if p in old.fields and "latest" in old.fields[p].fields]
         if len(set(targets)) != 1:

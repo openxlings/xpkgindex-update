@@ -229,8 +229,16 @@ supposedly older supported version. Optional target failures omit the entire
 target, with a diagnostic. Only downloaded, matching resources enter the plan.
 
 `latest = "keep"` appends without moving pointers, useful for LTS/pinned aliases.
-Current platform latest refs must agree. Historical platform version sets may
-differ; new candidates cover every declared platform and architecture. Existing
+By default current platform latest refs must agree. Historical platform version
+sets may differ; new candidates cover every declared platform and architecture.
+Existing partial candidates are conflicts. `divergence = "platform"` opts a
+package out of both uniformity rules when upstream numbers releases per platform:
+latest refs may then name different versions per platform, and a PR may append a
+version to a subset of platforms (each addition still needs the full declared
+architecture matrix, explicit URL and SHA256 literals, and byte verification).
+Automatic advancement stays conservative: an update-ready plan must still beat
+every platform's newest version and complete the whole resource matrix, which
+converges the pointers in one atomic append. Existing
 partial candidates are conflicts. Literal multi-architecture output leaves every
 historical version, manual entry, comment and runtime hook intact. An opaque
 historical helper is never executed; an explicit matrix matching the package's
