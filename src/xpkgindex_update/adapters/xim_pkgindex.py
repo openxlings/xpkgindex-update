@@ -556,6 +556,7 @@ def protected_metadata(text):
 
 def guard(before, after):
     assert_preserved(before, after)
+    _assert_revision_covers_platforms(before, after)
     if protected_metadata(before) != protected_metadata(after):
         raise Invalid("automatic updates must not change dependencies or other runtime metadata")
     old, new = parse(before).fields.get('xpm'), parse(after).fields.get('xpm')
@@ -594,3 +595,24 @@ def guard(before, after):
             raise Invalid("latest advancement must cover every platform")
     if parse(before).end and before[parse(before).end:] != after[parse(after).end:]:
         raise Invalid("automatic updates must not change runtime hooks")
+
+
+def _assert_revision_covers_platforms(before, after):
+    """A corrective repack of one version lands on every platform that carries
+    the version. One platform's fix alone would leave the others serving the
+    superseded archive under the same version key -- the omission reads as a
+    stale mirror, not a choice, which is what the version-set parity test
+    states for the keys themselves."""
+    from ..manifest import version_blocks
+    old, new = version_blocks(before), version_blocks(after)
+    changed = {}
+    for plat, entries in old.items():
+        for version, raw in entries.items():
+            if plat in new and version in new[plat] and new[plat][version] != raw:
+                changed.setdefault(version, set()).add(plat)
+    for version, plats in changed.items():
+        carrying = {plat for plat, entries in old.items() if version in entries}
+        if carrying != plats:
+            missing = ", ".join(sorted(carrying - plats))
+            raise Invalid(
+                f"corrective revision of {version} must cover every platform; still unchanged: {missing}")
