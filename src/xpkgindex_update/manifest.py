@@ -301,6 +301,92 @@ def version_blocks(text: str) -> dict[str, dict[str, str]]:
     return out
 
 
+def _entry_plain(node):
+    """The value an entry carries, tables flattened to plain dicts."""
+    if node is None:
+        return None
+    if node.kind != "table":
+        return node.plain() if hasattr(node, "plain") else node.value
+    out = {}
+    for key, child in node.fields.items():
+        out[key] = _entry_plain(child)
+    return out
+
+
+def _urls_of(plain) -> set[str]:
+    """Every url string an entry names, under any arch subkey or directly."""
+    urls = set()
+    if not isinstance(plain, dict):
+        return urls
+    for key, value in plain.items():
+        if key == "url":
+            urls |= set(value.values()) if isinstance(value, dict) else {value}
+        elif isinstance(value, dict):
+            urls |= _urls_of(value)
+    return urls
+
+
+def _revision_of(plain) -> int:
+    if isinstance(plain, dict) and isinstance(plain.get("revision"), int):
+        return plain["revision"]
+    return 1
+
+
+def _digests_of(plain) -> set:
+    values = set()
+    if isinstance(plain, dict):
+        for key, value in plain.items():
+            if key == "sha256":
+                values.add(value)
+            elif isinstance(value, dict):
+                values |= _digests_of(value)
+    return values
+
+
+def _shape_of(plain):
+    """The entry minus everything a corrective repack may legitimately set."""
+    if not isinstance(plain, dict):
+        return plain
+    out = {}
+    for key, value in plain.items():
+        if key in ("revision", "floor", "url", "sha256"):
+            continue
+        out[key] = _shape_of(value)
+    return out
+
+
+def is_corrective_revision(old_plain, new_plain, version: str) -> bool:
+    """Whether one entry's change is a corrective repack of the same version.
+
+    The form xpackage-v2's revision field describes: the payload was repacked
+    by us, the upstream version did not move, so the same version key carries
+    a raised revision naming a new asset. The rules keep the change honest --
+    a raised revision with unchanged resources restates a configuration-only
+    repack (the form llvm's own revision 1 took); changed resources require
+    every new url to name the corrective asset, `<version>-r<revision>`, so an
+    old archive cannot be retagged as new; digests move together with urls;
+    and nothing else about the entry may change. floor may only follow.
+    """
+    if not isinstance(new_plain, dict):
+        return False
+    old_rev, new_rev = _revision_of(old_plain), _revision_of(new_plain)
+    if new_rev <= old_rev:
+        return False
+    old_urls, new_urls = _urls_of(old_plain), _urls_of(new_plain)
+    urls_moved = new_urls != old_urls
+    if urls_moved:
+        marker = f"{version}-r{new_rev}"
+        if not new_urls or not all(marker in url for url in new_urls):
+            return False
+    if (_digests_of(new_plain) == _digests_of(old_plain)) != (not urls_moved):
+        return False
+    old_floor = old_plain.get("floor", 0) if isinstance(old_plain, dict) else 0
+    new_floor = new_plain.get("floor", 0)
+    if not (isinstance(new_floor, int) and old_floor <= new_floor <= new_rev):
+        return False
+    return _shape_of(new_plain) == _shape_of(old_plain)
+
+
 def assert_preserved(before: str, after: str) -> None:
     old = version_blocks(before)
     new = version_blocks(after)
@@ -311,7 +397,10 @@ def assert_preserved(before: str, after: str) -> None:
             raise Invalid("existing version order changed")
         for version, raw in entries.items():
             if new[plat][version] != raw:
-                raise Invalid(f"existing version changed: {plat}/{version}")
+                before_pkg = parse(before).table()["xpm"].fields[plat].fields[version]
+                after_pkg = parse(after).table()["xpm"].fields[plat].fields[version]
+                if not is_corrective_revision(_entry_plain(before_pkg), _entry_plain(after_pkg), version):
+                    raise Invalid(f"existing version changed: {plat}/{version}")
 
 
 def runtime_signature(text: str):
