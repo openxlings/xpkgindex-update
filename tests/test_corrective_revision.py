@@ -159,3 +159,23 @@ def test_floor_follows():
         '["1.0.0"] = {\n                revision = 2,\n                floor = 3,', 1)
     with pytest.raises(Invalid):
         assert_preserved(BASE, runaway)
+
+
+def test_a_shared_template_entry_becomes_an_explicit_corrective_table():
+    before = BASE.replace(OLD_MACOS, '["1.0.0"] = "XLINGS_RES",')
+    after = corrective()
+    assert_preserved(before, after)
+
+
+def test_a_template_entry_becoming_a_table_without_the_marker_is_refused():
+    before = BASE.replace(OLD_MACOS, '["1.0.0"] = "XLINGS_RES",')
+    with pytest.raises(Invalid):
+        assert_preserved(before, corrective(
+            macos=macos_entry(2, "-other", "ddd")))
+
+
+def test_a_platform_left_on_the_template_is_refused():
+    before = BASE.replace(OLD_LINUX, '["1.0.0"] = "XLINGS_RES",')
+    after = before.replace(OLD_MACOS, macos_entry(2, "-r2", "ddd"))
+    with pytest.raises(Invalid, match="every platform"):
+        xim.guard(before, after)
