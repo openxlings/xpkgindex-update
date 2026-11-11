@@ -366,25 +366,31 @@ def is_corrective_revision(old_plain, new_plain, version: str) -> bool:
     every new url to name the corrective asset, `<version>-r<revision>`, so an
     old archive cannot be retagged as new; digests move together with urls;
     and nothing else about the entry may change. floor may only follow.
+
+    An entry spelled as the shared url template (a bare string) carries no
+    resources of its own, and a corrective asset lives under its own release
+    tag, which no template spelling reaches -- so that entry becomes an
+    explicit table here, held to the marker rule alone.
     """
     if not isinstance(new_plain, dict):
         return False
     old_rev, new_rev = _revision_of(old_plain), _revision_of(new_plain)
     if new_rev <= old_rev:
         return False
+    from_template = not isinstance(old_plain, dict)
     old_urls, new_urls = _urls_of(old_plain), _urls_of(new_plain)
-    urls_moved = new_urls != old_urls
+    urls_moved = from_template or new_urls != old_urls
     if urls_moved:
         marker = f"{version}-r{new_rev}"
         if not new_urls or not all(marker in url for url in new_urls):
             return False
-    if (_digests_of(new_plain) == _digests_of(old_plain)) != (not urls_moved):
+    if not from_template and (_digests_of(new_plain) == _digests_of(old_plain)) != (not urls_moved):
         return False
     old_floor = old_plain.get("floor", 0) if isinstance(old_plain, dict) else 0
     new_floor = new_plain.get("floor", 0)
     if not (isinstance(new_floor, int) and old_floor <= new_floor <= new_rev):
         return False
-    return _shape_of(new_plain) == _shape_of(old_plain)
+    return from_template or _shape_of(new_plain) == _shape_of(old_plain)
 
 
 def assert_preserved(before: str, after: str) -> None:
