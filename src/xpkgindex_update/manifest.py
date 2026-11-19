@@ -327,9 +327,13 @@ def _urls_of(plain) -> set[str]:
 
 
 def _revision_of(plain) -> int:
+    """An entry's packaging revision. One that states none has revision 0
+    (xim-pkgindex docs/specs/xpackage-v2.md, "revision"), as the client reads it:
+    its first corrective repack is revision 1, assets marked `-r1` (the form
+    glibc 2.44.3's revision 1 took)."""
     if isinstance(plain, dict) and isinstance(plain.get("revision"), int):
         return plain["revision"]
-    return 1
+    return 0
 
 
 def _digests_of(plain) -> set:

@@ -179,3 +179,15 @@ def test_a_platform_left_on_the_template_is_refused():
     after = before.replace(OLD_MACOS, macos_entry(2, "-r2", "ddd"))
     with pytest.raises(Invalid, match="every platform"):
         xim.guard(before, after)
+
+
+def test_the_first_corrective_revision_of_an_entry_stating_none_is_1():
+    """An entry that states no revision has revision 0 (xpackage-v2), so its first
+    corrective repack is revision 1 with assets marked `-r1`."""
+    assert_preserved(BASE, BASE.replace(OLD_MACOS, macos_entry(1, "-r1", "ddd")))
+
+
+def test_a_first_corrective_revision_must_mark_its_assets_r1():
+    with pytest.raises(Invalid):
+        assert_preserved(BASE, BASE.replace(OLD_MACOS, macos_entry(1, "", "ddd")))
+
