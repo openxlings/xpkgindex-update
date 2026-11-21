@@ -373,9 +373,25 @@ def candidate_tag(info, version, assets):
     return matches[0]
 
 
-def verify_candidates(info, before, github):
-    """Verify only versions added in this diff; never discover future releases."""
-    guard(before.replace('\r\n', '\n'), info['text'].replace('\r\n', '\n'))
+def historical(version, old):
+    """A version the updater can never append: not newer than every existing one.
+
+    append() only writes a candidate newer than every version already declared,
+    so an older addition is a reviewed backfill, not an update candidate. Its
+    resources are checked as declared rather than against the release template,
+    which describes the asset shape of future releases only."""
+    existing = [version_key(v) for p in old.values() if p.kind == 'table'
+                for v in p.fields if ordered(v)]
+    return bool(existing) and version_key(version) < max(existing)
+
+
+def verify_candidates(info, before, github, reviewed=False):
+    """Verify only versions added in this diff; never discover future releases.
+
+    Update candidates must match the declared matrix. Historical additions keep
+    the same platform, architecture, region and SHA256 requirements, but their
+    URLs are the ones the reviewed entry declares."""
+    guard(before.replace('\r\n', '\n'), info['text'].replace('\r\n', '\n'), reviewed=reviewed)
     validate_config(info)
     old = parse(before).fields['xpm'].fields
     additions = {p: set(data['entries']) - set(old[p].fields) for p, data in info['platforms'].items()}
@@ -403,7 +419,8 @@ def verify_candidates(info, before, github):
                 assets.append({'platform': plat, 'arch': arch, 'resources': resources})
         if len({tuple(sorted(a['resources'])) for a in assets}) != 1:
             raise Invalid('candidate optional targets must cover the full matrix')
-        tag = candidate_tag(info, version, assets)
+        backfill = historical(version, old)
+        tag = None if backfill else candidate_tag(info, version, assets)
         for asset in assets:
             for region, resource in asset['resources'].items():
                 checked = verify_resource(github, resource['url'], auto.get('verify') == 'sha256-sidecar')
@@ -414,7 +431,8 @@ def verify_candidates(info, before, github):
                 asset['resources'][region] = checked
             if global_fallback(asset['resources']):
                 raise Invalid('CN mirror redirects to the GLOBAL download host')
-        reports.append({'id': info['id'], 'candidate': version, 'status': 'verified', 'tag': tag, 'assets': assets})
+        report = {'id': info['id'], 'candidate': version, 'status': 'verified', 'assets': assets}
+        reports.append({**report, 'kind': 'historical'} if backfill else {**report, 'tag': tag})
     return reports
 
 
@@ -554,10 +572,15 @@ def protected_metadata(text):
     return value(root, ())
 
 
-def guard(before, after):
+def guard(before, after, reviewed=False):
+    """Published history and the latest policy hold for every change.
+
+    Dependencies, other runtime metadata and hooks are what the updater never
+    writes, so an automatic change must leave them untouched. A reviewed change
+    (reviewed=True) may correct them; the index's package CI installs it."""
     assert_preserved(before, after)
     _assert_revision_covers_platforms(before, after)
-    if protected_metadata(before) != protected_metadata(after):
+    if not reviewed and protected_metadata(before) != protected_metadata(after):
         raise Invalid("automatic updates must not change dependencies or other runtime metadata")
     old, new = parse(before).fields.get('xpm'), parse(after).fields.get('xpm')
     if not old:
@@ -593,7 +616,7 @@ def guard(before, after):
                    for p in PLATFORMS if p in old.fields and "latest" in old.fields[p].fields]
         if len(set(targets)) != 1:
             raise Invalid("latest advancement must cover every platform")
-    if parse(before).end and before[parse(before).end:] != after[parse(after).end:]:
+    if not reviewed and parse(before).end and before[parse(before).end:] != after[parse(after).end:]:
         raise Invalid("automatic updates must not change runtime hooks")
 
 

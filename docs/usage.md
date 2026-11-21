@@ -286,6 +286,16 @@ and compares every resource SHA256 and configured sidecar. It does not discover 
 check before native installation jobs; `guard` alone protects history but does
 not download candidate resources.
 
+An added version that is not newer than every existing version is a historical
+backfill: `append` can never write it, so its URLs are the ones the entry declares
+instead of the release template. It keeps the platform, architecture, required
+region, SHA256, sidecar and CN redirect checks, and reports `kind: historical`.
+
+`guard` and `verify` freeze dependencies, other runtime metadata and hooks, which
+the updater never writes. For a reviewed pull request, pass `--reviewed`: published
+versions and the latest policy are still enforced, while those corrections are left
+to review and the index's installation CI.
+
 ### Scan batches, fairness and reusable PRs
 
 `max_packages` is the scan **batch size**, not the number of upgrades or PRs.
