@@ -424,3 +424,104 @@ def test_divergent_appcast_waits_until_a_version_beats_every_platform(divergent_
     assert record['status'] == 'update-ready' and record['candidate'] == '1.3.0'
     xim.append(root, record, client)
     assert xim.latest_refs(xim.package_info(path, root)) == {'linux': '1.3.0', 'macosx': '1.3.0'}
+
+
+SHA = 'b' * 64
+BACKFILL = '''            ["0.8.0"] = {
+                x86_64 = { url = "https://example.org/0.8.0/foo-linux-x64", sha256 = "%s" },
+                aarch64 = { url = "https://example.org/0.8.0/foo-linux-arm64", sha256 = "%s" },
+            },
+''' % (SHA, SHA)
+WINDOWS_BACKFILL = '            ["0.8.0"] = { url = "https://example.org/0.8.0/foo-win-x64.exe", sha256 = "%s" },\n' % SHA
+
+
+def backfilled(before, linux=BACKFILL, windows=WINDOWS_BACKFILL, hook=None):
+    after = before.replace('            ["1.0.0"] = { sha256 = { x86_64', linux + '            ["1.0.0"] = { sha256 = { x86_64')
+    after = after.replace('            ["1.0.0"] = { url = "old.zip"', windows + '            ["1.0.0"] = { url = "old.zip"')
+    if hook:
+        after = after.replace('function install() error("never execute me") end', hook)
+    return after
+
+
+def test_historical_backfill_is_verified_against_its_declared_resources(index):
+    """An older version is a reviewed backfill: the updater can never append it,
+    so the release template, which describes future assets, does not apply."""
+    root, path = index
+    before = path.read_text()
+    path.write_text(backfilled(before))
+    client = FakeGitHub()
+    client.listing = lambda *args: pytest.fail('candidate CI must never discover releases')
+    [report] = xim.verify_candidates(xim.package_info(path, root), before, client)
+    assert report['candidate'] == '0.8.0' and report['kind'] == 'historical' and 'tag' not in report
+    assert {(a['platform'], a['arch']) for a in report['assets']} == {
+        ('linux', 'x86_64'), ('linux', 'aarch64'), ('windows', 'shared')}
+    assert report['assets'][0]['resources']['GLOBAL']['url'] == 'https://example.org/0.8.0/foo-linux-x64'
+
+
+@pytest.mark.parametrize(('linux', 'windows', 'error'), [
+    (BACKFILL.replace(SHA, 'c' * 64, 1), WINDOWS_BACKFILL, 'SHA256 mismatch'),
+    (BACKFILL, '', 'must cover every platform'),
+    (BACKFILL.replace('aarch64 = {', '-- aarch64 = {'), WINDOWS_BACKFILL, 'architecture matrix'),
+    (BACKFILL.replace('url = "https://example.org/0.8.0/foo-linux-x64"',
+                      'url = { CN = "https://mirror.example/0.8.0/foo-linux-x64" }'),
+     WINDOWS_BACKFILL, 'required resource'),
+])
+def test_historical_backfill_keeps_coverage_region_and_hash_rules(index, linux, windows, error):
+    root, path = index
+    before = path.read_text()
+    path.write_text(backfilled(before, linux, windows))
+    with pytest.raises(Invalid, match=error):
+        xim.verify_candidates(xim.package_info(path, root), before, FakeGitHub())
+
+
+def test_a_newer_addition_still_follows_the_release_template(index):
+    root, path = index
+    before = path.read_text()
+    newer = backfilled(before).replace('"0.8.0"', '"1.2.0"').replace('/0.8.0/', '/v1.2.0/')
+    path.write_text(newer)
+    with pytest.raises(Invalid, match='differ from the declared matrix'):
+        xim.verify_candidates(xim.package_info(path, root), before, FakeGitHub())
+
+
+def test_reviewed_changes_may_correct_hooks_and_metadata_automatic_ones_may_not(index):
+    _, path = index
+    before = path.read_text()
+    hook = 'function install() return os.isfile("foo") end'
+    for after, message in [(before.replace('never execute me', 'still never'), 'runtime hooks'),
+                           (before.replace('spec = "2",', 'spec = "2", programs = {"foo"},'), 'runtime metadata')]:
+        with pytest.raises(Invalid, match=message):
+            xim.guard(before, after)
+        xim.guard(before, after, reviewed=True)
+    root, _ = index
+    path.write_text(backfilled(before, hook=hook))
+    with pytest.raises(Invalid, match='runtime hooks'):
+        xim.verify_candidates(xim.package_info(path, root), before, FakeGitHub())
+    assert xim.verify_candidates(xim.package_info(path, root), before, FakeGitHub(), reviewed=True)
+
+
+@pytest.mark.parametrize(('change', 'error'), [
+    (lambda t: t.replace('            ["0.9.0"] = { url = "historical-linux-only", sha256 = "immutable" },\n', ''),
+     'existing version was removed'),
+    (lambda t: t.replace('"immutable"', '"rewritten"'), 'existing version changed'),
+    (lambda t: t.replace('["latest"] = { ref = "1.0.0" }', '["latest"] = { ref = "0.9.0" }', 1), 'latest'),
+])
+def test_a_reviewed_change_still_preserves_history_and_the_latest_policy(index, change, error):
+    _, path = index
+    before = path.read_text()
+    with pytest.raises(Invalid, match=error):
+        xim.guard(before, change(before), reviewed=True)
+
+
+def test_cli_guard_accepts_a_reviewed_hook_fix(index, capsys):
+    root, path = index
+    subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+    config = root / '.github/xpkgindex-update.yml'
+    config.parent.mkdir()
+    config.write_text('version: 1\nadapter: xim-pkgindex\n')
+    subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+    subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@example.org', 'commit', '-qm', 'base'],
+                   cwd=root, check=True)
+    path.write_text(path.read_text().replace('never execute me', 'still never'))
+    assert main(['--workspace', str(root), 'guard', '--base', 'HEAD']) != 0
+    assert main(['--workspace', str(root), 'guard', '--base', 'HEAD', '--reviewed']) == 0
+    capsys.readouterr()

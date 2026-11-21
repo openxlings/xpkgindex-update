@@ -86,6 +86,9 @@ def main(argv=None) -> int:
             command.add_argument("--draft", action="store_true")
         if name in ("guard", "runtime-diff", "verify"):
             command.add_argument("--base", required=True)
+        if name in ("guard", "verify"):
+            command.add_argument("--reviewed", action="store_true",
+                                 help="a reviewed change may also correct dependencies, metadata and hooks")
     args = parser.parse_args(argv)
     root = args.workspace.resolve()
     try:
@@ -214,7 +217,7 @@ def main(argv=None) -> int:
                 if not info['autoupdate'] or args.package and info['id'] != args.package:
                     continue
                 before = subprocess.check_output(['git', 'show', f'{args.base}:{filename}'], cwd=root, text=True, encoding='utf-8')
-                records.extend(adapter.verify_candidates(info, before, github))
+                records.extend(adapter.verify_candidates(info, before, github, reviewed=args.reviewed))
             write_report({'packages': records, 'requests': github.requests, 'downloaded_bytes': github.downloaded}, args.output)
             return 0
         if args.command == "guard":
@@ -229,7 +232,7 @@ def main(argv=None) -> int:
                 before = subprocess.check_output(["git", "show", f"{args.base}:{filename}"],
                                                      cwd=root, text=True, encoding="utf-8")
                 if before != path.read_text(encoding="utf-8"):
-                    adapter.guard(before, path.read_text(encoding="utf-8"))
+                    adapter.guard(before, path.read_text(encoding="utf-8"), reviewed=args.reviewed)
                 checked += 1
             write_report({"checked_descriptors": checked, "status": "preserved"}, args.output)
             return 0
