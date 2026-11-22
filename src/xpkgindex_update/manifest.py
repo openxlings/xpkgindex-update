@@ -337,11 +337,14 @@ def _revision_of(plain) -> int:
 
 
 def _digests_of(plain) -> set:
+    """Every digest an entry names: a `sha256` string, or the values of a
+    `sha256` table keyed by architecture (`{ x86_64 = "...", aarch64 = "..." }`),
+    as `_urls_of` reads a `url` table."""
     values = set()
     if isinstance(plain, dict):
         for key, value in plain.items():
             if key == "sha256":
-                values.add(value)
+                values |= set(value.values()) if isinstance(value, dict) else {value}
             elif isinstance(value, dict):
                 values |= _digests_of(value)
     return values

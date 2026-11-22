@@ -191,3 +191,35 @@ def test_a_first_corrective_revision_must_mark_its_assets_r1():
     with pytest.raises(Invalid):
         assert_preserved(BASE, BASE.replace(OLD_MACOS, macos_entry(1, "", "ddd")))
 
+
+PER_ARCH = """\
+package = {
+    name = "pkg",
+
+    xpm = {
+        linux = {
+            ["1.0.0"] = {
+                url = "https://example.com/pkg/1.0.0/pkg-linux-${arch}-1.0.0.tar.xz",
+                sha256 = {
+                    aarch64 = "aaa",
+                    x86_64 = "bbb",
+                },
+            },
+        },
+    }
+}
+"""
+
+
+def test_a_revision_over_per_architecture_digests_restates_them():
+    """A `sha256` table keyed by architecture is the entry's digests, as a `url`
+    table is its urls: a raised revision that keeps both is a configuration-only
+    repack (the CUDA libraries' revision 1, which declared the GCC runtime)."""
+    after = PER_ARCH.replace('["1.0.0"] = {\n', '["1.0.0"] = {\n                revision = 1,\n', 1)
+    assert_preserved(PER_ARCH, after)
+
+
+def test_a_per_architecture_digest_changed_under_the_same_url_is_refused():
+    after = PER_ARCH.replace('["1.0.0"] = {\n', '["1.0.0"] = {\n                revision = 1,\n', 1)
+    with pytest.raises(Invalid):
+        assert_preserved(PER_ARCH, after.replace('x86_64 = "bbb"', 'x86_64 = "ccc"'))
