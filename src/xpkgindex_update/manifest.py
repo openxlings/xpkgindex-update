@@ -400,6 +400,60 @@ def is_corrective_revision(old_plain, new_plain, version: str) -> bool:
     return from_template or _shape_of(new_plain) == _shape_of(old_plain)
 
 
+_ARCHES = {"x86_64", "aarch64", "x86", "armv7", "riscv64"}
+
+
+def _artifacts_of(plain) -> dict | None:
+    """arch (or "*" for every one) -> (url, digest) of an entry's artifacts,
+    with what else the entry states; None when the entry is not a table."""
+    if not isinstance(plain, dict):
+        return None
+    arches = {k: v for k, v in plain.items() if k in _ARCHES and isinstance(v, dict)}
+    if arches:
+        artifacts = {a: (repr(v.get("url")), v.get("sha256")) for a, v in arches.items()}
+        rest = {k: v for k, v in plain.items() if k not in arches}
+    else:
+        digest = plain.get("sha256")
+        url = repr(plain.get("url"))
+        if isinstance(digest, dict):
+            artifacts = {a: (url, h) for a, h in digest.items()}
+        else:
+            artifacts = {"*": (url, digest)}
+        rest = {k: v for k, v in plain.items() if k not in ("url", "sha256")}
+    return {"artifacts": artifacts, "rest": rest}
+
+
+def gains_architectures(old_plain, new_plain) -> bool:
+    """Whether one entry's change only adds an artifact for another architecture.
+
+    The entry keeps every artifact it had -- the same URL and digest for each
+    architecture it named, or, when it named none, for at least one -- and
+    adds artifacts under architectures it did not name; `revision` may rise
+    (a client that installed the one artifact on the wrong machine is offered
+    the new one), nothing else changes. xim-pkgindex writes this when an
+    upstream that ships an aarch64 archive was given only its x86_64 one."""
+    old, new = _artifacts_of(old_plain), _artifacts_of(new_plain)
+    if old is None or new is None or "*" in new["artifacts"]:
+        return False
+    if "*" in old["artifacts"]:
+        if old["artifacts"]["*"] not in new["artifacts"].values():
+            return False
+    elif any(new["artifacts"].get(a) != v for a, v in old["artifacts"].items()):
+        return False
+    if "*" in old["artifacts"]:
+        if len(new["artifacts"]) < 2:
+            return False
+    elif not set(new["artifacts"]) - set(old["artifacts"]):
+        return False
+    old_rest, new_rest = dict(old["rest"]), dict(new["rest"])
+    old_rev, new_rev = _revision_of(old_rest), _revision_of(new_rest)
+    if new_rev < old_rev or old_rest.get("floor", 0) != new_rest.get("floor", 0):
+        return False
+    for rest in (old_rest, new_rest):
+        rest.pop("revision", None)
+    return old_rest == new_rest
+
+
 def assert_preserved(before: str, after: str) -> None:
     old = version_blocks(before)
     new = version_blocks(after)
@@ -412,7 +466,9 @@ def assert_preserved(before: str, after: str) -> None:
             if new[plat][version] != raw:
                 before_pkg = parse(before).table()["xpm"].fields[plat].fields[version]
                 after_pkg = parse(after).table()["xpm"].fields[plat].fields[version]
-                if not is_corrective_revision(_entry_plain(before_pkg), _entry_plain(after_pkg), version):
+                old_plain, new_plain = _entry_plain(before_pkg), _entry_plain(after_pkg)
+                if not (is_corrective_revision(old_plain, new_plain, version)
+                        or gains_architectures(old_plain, new_plain)):
                     raise Invalid(f"existing version changed: {plat}/{version}")
 
 

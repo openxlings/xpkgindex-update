@@ -153,6 +153,53 @@ def entry_arches(entry):
     return set(sha.fields) if sha and sha.kind == 'table' else None
 
 
+def named_artifact(entry):
+    """The architectures one artifact is named for, or None.
+
+    `{ url = <fixed url>, sha256 = { x86_64 = h } }` is one artifact for x86_64;
+    `sha256 = { x86_64 = h, aarch64 = h }` (the same hash under each) is one
+    artifact without machine code, for both (xim-pkgindex: an entry names the
+    architectures it is for). A URL template with ${arch} beside a digest
+    table is an artifact per architecture instead, as is a per-architecture
+    resource map."""
+    if entry is None or entry.kind != 'table' or set(entry.fields) & ARCHES:
+        return None
+    sha, url = entry.fields.get('sha256'), entry.fields.get('url')
+    if not sha or sha.kind != 'table' or not sha.fields or url is None:
+        return None
+    try:
+        urls = regions(url.plain())
+    except Invalid:
+        return None
+    if any('${' in u for u in urls.values()):
+        return None
+    if set(sha.fields) - ARCHES or len({n.plain() for n in sha.fields.values()}) != 1:
+        return None
+    return list(sha.fields)
+
+
+def newest_entry(info, plat):
+    entries = info['platforms'][plat]['entries']
+    return entries[max((v for v in entries if ordered(v)), key=version_key)]
+
+
+def artifact_form(info, plat, arches):
+    """The architectures a new version's one artifact is written under, when
+    the platform's newest entry is one named artifact and the declaration
+    gives one URL for it (shared, or under those same architectures, all the
+    same template). None: the new version is written per architecture, or
+    as one unnamed artifact, as the declaration gives it."""
+    named = named_artifact(newest_entry(info, plat))
+    if not named:
+        return None
+    if set(arches) == {'shared'}:
+        return named
+    templates = {json.dumps(regions_, sort_keys=True) for regions_ in arches.values()}
+    if set(arches) == set(named) and len(templates) == 1:
+        return named
+    return None
+
+
 def validate_config(info):
     auto = config(info)
     if auto['latest'] not in ('advance', 'keep'):
@@ -170,6 +217,8 @@ def validate_config(info):
         entries = info['platforms'][plat]['entries']
         newest = max((v for v in entries if ordered(v)), key=version_key)
         expected = entry_arches(entries[newest]) or entry_arches(entries[refs[plat]])
+        if named_artifact(entries[newest]) and set(arches) == {'shared'}:
+            expected = None   # one artifact, written under the architectures it names
         if expected and set(arches) != expected:
             raise Invalid(f'architecture set changed for {plat}: {sorted(expected)} -> {sorted(arches)}')
         if not expected and len(arches) > 1:
@@ -405,11 +454,23 @@ def verify_candidates(info, before, github, reviewed=False):
         for plat, arches in expected.items():
             if version not in additions[plat]:
                 continue
-            entry = info['platforms'][plat]['entries'][version].plain()
-            if set(arches) != {'shared'} and set(entry) != set(arches):
+            node = info['platforms'][plat]['entries'][version]
+            entry = node.plain()
+            named = named_artifact(node)
+            if named:
+                # One artifact named for its architectures: the form of the
+                # platform's entries (the newest one before this change).
+                previous = [v for v in old[plat].fields if ordered(v)] if plat in old else []
+                form = named_artifact(old[plat].fields[max(previous, key=version_key)]) if previous else None
+                if form is not None and set(named) != set(form):
+                    raise Invalid('candidate names other architectures than the platform\'s entries')
+                if set(arches) != {'shared'} and set(arches) != set(named):
+                    raise Invalid('candidate resource architecture matrix differs from declaration')
+                entry = {**entry, 'sha256': next(iter(entry['sha256'].values()))}
+            elif set(arches) != {'shared'} and set(entry) != set(arches):
                 raise Invalid('candidate resource architecture matrix differs from declaration')
             for arch in arches:
-                resource = entry if arch == 'shared' else entry[arch]
+                resource = entry if arch == 'shared' or named else entry[arch]
                 if set(resource) != {'url', 'sha256'}:
                     raise Invalid('candidate must contain explicit URL and SHA256 resources')
                 resources = {region: {'url': url, 'sha256': resource['sha256']}
@@ -509,7 +570,14 @@ def append(root: Path, record: dict, github: GitHub):
             urls = {region: r['url'] for region, r in resources.items()}
             values[arch] = {'url': urls['GLOBAL'] if set(urls) == {'GLOBAL'} else urls,
                             'sha256': next(iter(resources.values()))['sha256']}
-        versions[plat] = values['shared'] if set(values) == {'shared'} else values
+        named = artifact_form(info, plat, arches)
+        if named:
+            # The form of the platform's entries: one artifact, named for the
+            # architectures they name.
+            value = next(iter(values.values()))
+            versions[plat] = {'url': value['url'], 'sha256': {a: value['sha256'] for a in named}}
+        else:
+            versions[plat] = values['shared'] if set(values) == {'shared'} else values
     text = info['text']
     edits = []
     seen_nodes = set()
