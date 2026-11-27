@@ -153,7 +153,14 @@ def entry_arches(entry):
     return set(sha.fields) if sha and sha.kind == 'table' else None
 
 
-def named_artifact(entry):
+def platform_source(xpm_fields, plat):
+    """The `source` an entry without a URL downloads: its platform's, else xpm's."""
+    section = xpm_fields.get(plat)
+    node = section.fields.get('source') if section is not None and section.kind == 'table' else None
+    return node if node is not None else xpm_fields.get('source')
+
+
+def named_artifact(entry, source=None):
     """The architectures one artifact is named for, or None.
 
     `{ url = <fixed url>, sha256 = { x86_64 = h } }` is one artifact for x86_64;
@@ -164,14 +171,14 @@ def named_artifact(entry):
     resource map."""
     if entry is None or entry.kind != 'table' or set(entry.fields) & ARCHES:
         return None
-    sha, url = entry.fields.get('sha256'), entry.fields.get('url')
+    sha, url = entry.fields.get('sha256'), entry.fields.get('url') or source
     if not sha or sha.kind != 'table' or not sha.fields or url is None:
         return None
     try:
         urls = regions(url.plain())
     except Invalid:
         return None
-    if any('${' in u for u in urls.values()):
+    if any('${arch' in u for u in urls.values()):
         return None
     if set(sha.fields) - ARCHES or len({n.plain() for n in sha.fields.values()}) != 1:
         return None
@@ -189,7 +196,7 @@ def artifact_form(info, plat, arches):
     gives one URL for it (shared, or under those same architectures, all the
     same template). None: the new version is written per architecture, or
     as one unnamed artifact, as the declaration gives it."""
-    named = named_artifact(newest_entry(info, plat))
+    named = named_artifact(newest_entry(info, plat), platform_source(info['package']['xpm'].fields, plat))
     if not named:
         return None
     if set(arches) == {'shared'}:
@@ -217,7 +224,8 @@ def validate_config(info):
         entries = info['platforms'][plat]['entries']
         newest = max((v for v in entries if ordered(v)), key=version_key)
         expected = entry_arches(entries[newest]) or entry_arches(entries[refs[plat]])
-        if named_artifact(entries[newest]) and set(arches) == {'shared'}:
+        if named_artifact(entries[newest], platform_source(info['package']['xpm'].fields, plat)) \
+                and set(arches) == {'shared'}:
             expected = None   # one artifact, written under the architectures it names
         if expected and set(arches) != expected:
             raise Invalid(f'architecture set changed for {plat}: {sorted(expected)} -> {sorted(arches)}')
@@ -456,12 +464,13 @@ def verify_candidates(info, before, github, reviewed=False):
                 continue
             node = info['platforms'][plat]['entries'][version]
             entry = node.plain()
-            named = named_artifact(node)
+            named = named_artifact(node, platform_source(info['package']['xpm'].fields, plat))
             if named:
                 # One artifact named for its architectures: the form of the
                 # platform's entries (the newest one before this change).
                 previous = [v for v in old[plat].fields if ordered(v)] if plat in old else []
-                form = named_artifact(old[plat].fields[max(previous, key=version_key)]) if previous else None
+                form = named_artifact(old[plat].fields[max(previous, key=version_key)],
+                                      platform_source(old, plat)) if previous else None
                 if form is not None and set(named) != set(form):
                     raise Invalid('candidate names other architectures than the platform\'s entries')
                 if set(arches) != {'shared'} and set(arches) != set(named):

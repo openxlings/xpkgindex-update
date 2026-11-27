@@ -134,3 +134,18 @@ def test_a_gained_architecture_is_one_platform_s_change():
                          ' aarch64 = { url = "https://e.org/g.tar.gz", sha256 = "%s" } } }' % (H, 'c' * 64))
     assert after != text
     xim.guard(text, after, reviewed=True)
+
+
+def test_an_entry_through_source_names_its_architectures_too(tmp_path):
+    text = descriptor(SHARED, '{ x86_64 = "%s", aarch64 = "%s" }' % (H, H))
+    text = text.replace('                url = "https://example.org/v1.0.0/foo.tar.gz",\n', '')
+    text = text.replace('    xpm = {\n', '    xpm = {\n        source = "https://example.org/v${version}/foo.tar.gz",\n')
+    path = tmp_path / 'pkgs/f/foo.lua'
+    path.parent.mkdir(parents=True)
+    path.write_text(text)
+    xim.validate_config(xim.package_info(path, tmp_path))
+    client = FakeGitHub()
+    record = xim.check_package(xim.package_info(path, tmp_path), client)
+    assert xim.append(tmp_path, record, client)
+    entry = parse(path.read_text()).fields['xpm'].fields['linux'].fields['1.1.0'].plain()
+    assert entry['sha256'] == {'x86_64': 'b' * 64, 'aarch64': 'b' * 64}
