@@ -244,6 +244,17 @@ historical version, manual entry, comment and runtime hook intact. An opaque
 historical helper is never executed; an explicit matrix matching the package's
 complete declared architectures is required for such a baseline.
 
+A new version keeps the form of its platform's entries. When the newest entry is
+one artifact named for the architectures it serves (`url` and a `sha256` table:
+`{ x86_64 = "<h>" }`, or the same hash under each architecture for an artifact
+without machine code), a target that gives one URL (shared, or that one URL under
+those architectures) writes the new version the same way, with the new hash under
+each of them; per-architecture URLs write a per-architecture entry. A published
+entry may gain an artifact for an architecture it did not name, keeping every
+artifact it had (its `revision` may rise); any other change is refused as before.
+Alias keys beside `latest` (`lts`) are runtime metadata: an automatic update keeps
+them, a reviewed change moves them.
+
 Optional `verify = "sha256-sidecar"` requires each artifact's `.sha256` sidecar to
 name the artifact and match its independently computed digest. Resource production
 is separate: consume existing xlings-res mirrors; never replace repackaged assets
