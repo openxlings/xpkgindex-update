@@ -435,10 +435,14 @@ def gains_architectures(old_plain, new_plain) -> bool:
     old, new = _artifacts_of(old_plain), _artifacts_of(new_plain)
     if old is None or new is None or "*" in new["artifacts"]:
         return False
+    def kept(before, after):
+        # The same URL and digest; an artifact that had no digest may gain
+        # one (that strengthens it, as the index's revision gate reads it).
+        return after is not None and after[0] == before[0] and before[1] in (None, after[1])
     if "*" in old["artifacts"]:
-        if old["artifacts"]["*"] not in new["artifacts"].values():
+        if not any(kept(old["artifacts"]["*"], a) for a in new["artifacts"].values()):
             return False
-    elif any(new["artifacts"].get(a) != v for a, v in old["artifacts"].items()):
+    elif any(not kept(v, new["artifacts"].get(a)) for a, v in old["artifacts"].items()):
         return False
     if "*" in old["artifacts"]:
         if len(new["artifacts"]) < 2:

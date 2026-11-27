@@ -108,6 +108,7 @@ OLD = {'url': {'GLOBAL': 'https://e.org/foo-x86_64.tar.gz', 'CN': 'https://m.cn/
     ({'x86_64': OLD, 'aarch64': {'url': 'https://e.org/foo-aarch64.tar.gz', 'sha256': 'c' * 64}}, True),
     ({'x86_64': {**OLD, 'sha256': 'd' * 64}, 'aarch64': {'url': 'https://e.org/a', 'sha256': 'c' * 64}}, False),
     ({'x86_64': OLD}, False),
+    ({'x86_64': {**OLD, 'sha256': H}, 'aarch64': {'url': 'https://e.org/a', 'sha256': 'c' * 64}}, True),
     ({'x86_64': OLD, 'aarch64': {'url': 'https://e.org/a', 'sha256': 'c' * 64}, 'deps': ['x']}, False),
 ])
 def test_an_entry_may_gain_an_architecture_and_keep_what_it_had(new, ok):
@@ -149,3 +150,11 @@ def test_an_entry_through_source_names_its_architectures_too(tmp_path):
     assert xim.append(tmp_path, record, client)
     entry = parse(path.read_text()).fields['xpm'].fields['linux'].fields['1.1.0'].plain()
     assert entry['sha256'] == {'x86_64': 'b' * 64, 'aarch64': 'b' * 64}
+
+
+def test_an_entry_without_a_digest_may_gain_one_with_an_architecture():
+    old = {'url': 'https://e.org/f.tar.gz', 'sha256': None}
+    new = {'x86_64': {'url': 'https://e.org/f.tar.gz', 'sha256': H},
+           'aarch64': {'url': 'https://e.org/g.tar.gz', 'sha256': 'c' * 64}, 'revision': 1}
+    assert gains_architectures({'url': 'https://e.org/f.tar.gz'}, new)
+    assert not gains_architectures(old | {'url': 'https://e.org/x.tar.gz'}, new)
