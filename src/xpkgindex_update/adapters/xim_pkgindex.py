@@ -693,13 +693,18 @@ def _assert_revision_covers_platforms(before, after):
     the version. One platform's fix alone would leave the others serving the
     superseded archive under the same version key -- the omission reads as a
     stale mirror, not a choice, which is what the version-set parity test
-    states for the keys themselves."""
-    from ..manifest import version_blocks
+    states for the keys themselves. An entry that only gains an artifact for
+    another architecture repacks nothing: it is one platform's."""
+    from ..manifest import _entry_plain, gains_architectures, version_blocks
     old, new = version_blocks(before), version_blocks(after)
+    old_xpm, new_xpm = parse(before).fields['xpm'].fields, parse(after).fields['xpm'].fields
     changed = {}
     for plat, entries in old.items():
         for version, raw in entries.items():
             if plat in new and version in new[plat] and new[plat][version] != raw:
+                if gains_architectures(_entry_plain(old_xpm[plat].fields[version]),
+                                       _entry_plain(new_xpm[plat].fields[version])):
+                    continue
                 changed.setdefault(version, set()).add(plat)
     for version, plats in changed.items():
         carrying = {plat for plat, entries in old.items() if version in entries}

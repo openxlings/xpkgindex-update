@@ -122,3 +122,15 @@ def test_assert_preserved_accepts_an_added_architecture():
     assert_preserved(before, after)
     with pytest.raises(Invalid):
         assert_preserved(before, after.replace('f.tar.gz', 'h.tar.gz'))
+
+
+def test_a_gained_architecture_is_one_platform_s_change():
+    text = ('package = { xpm = {'
+            ' linux = { ["1.0"] = { url = "https://e.org/f.tar.gz", sha256 = "%s" } },'
+            ' windows = { ["1.0"] = { url = "https://e.org/f.zip", sha256 = "%s" } } } }' % (H, H))
+    after = text.replace('linux = { ["1.0"] = { url = "https://e.org/f.tar.gz", sha256 = "%s" } }' % H,
+                         'linux = { ["1.0"] = { revision = 1,'
+                         ' x86_64 = { url = "https://e.org/f.tar.gz", sha256 = "%s" },'
+                         ' aarch64 = { url = "https://e.org/g.tar.gz", sha256 = "%s" } } }' % (H, 'c' * 64))
+    assert after != text
+    xim.guard(text, after, reviewed=True)
